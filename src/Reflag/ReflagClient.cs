@@ -121,6 +121,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
     public Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        EnsureNotDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         var initializeTask = GetOrCreateInitializeTask();
         return AsyncHelpers.WaitAsync(initializeTask, cancellationToken);
@@ -134,6 +135,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
     public async Task RefreshFlagsAsync(int? waitForVersion = null, CancellationToken cancellationToken = default)
     {
+        EnsureNotDisposed();
         if (waitForVersion is < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(waitForVersion), "waitForVersion must be greater than or equal to zero.");
@@ -345,44 +347,35 @@ public sealed class ReflagClient : IAsyncDisposable
 
     public void SetFlagOverrides(IReadOnlyDictionary<string, bool> overrides)
     {
+        EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overrides, nameof(overrides));
-        SetFlagOverrides(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
+        SetFlagOverridesCore(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
     }
 
     public void SetFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
     {
+        EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overridesFactory, nameof(overridesFactory));
-
-        lock (_overridesGate)
-        {
-            _baseFlagOverrides = NormalizeFlagOverrides(overridesFactory);
-            SyncFlagOverridesNoLock();
-        }
+        SetFlagOverridesCore(overridesFactory);
     }
 
     public IDisposable PushFlagOverrides(IReadOnlyDictionary<string, bool> overrides)
     {
+        EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overrides, nameof(overrides));
-        return PushFlagOverrides(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
+        return PushFlagOverridesCore(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
     }
 
     public IDisposable PushFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
     {
+        EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overridesFactory, nameof(overridesFactory));
-
-        FlagOverrideLayer layer;
-        lock (_overridesGate)
-        {
-            layer = new FlagOverrideLayer(_nextFlagOverrideLayerId++, NormalizeFlagOverrides(overridesFactory));
-            _flagOverrideLayers.Add(layer);
-            SyncFlagOverridesNoLock();
-        }
-
-        return new FlagOverrideScope(this, layer.Id);
+        return PushFlagOverridesCore(overridesFactory);
     }
 
     public void ClearFlagOverrides()
     {
+        EnsureNotDisposed();
         lock (_overridesGate)
         {
             _baseFlagOverrides = static _ => EmptyBooleanDictionary.Instance;
@@ -419,6 +412,66 @@ public sealed class ReflagClient : IAsyncDisposable
         return boundClient;
     }
 
+    internal Task TrackBoundClientAsync(
+        ReflagContext context,
+        ReflagTelemetryOptions? telemetryOptions,
+        string eventName,
+        ReflagEventTrackOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureNotDisposed();
+        if (telemetryOptions?.EnableTelemetry == false)
+        {
+            LogBoundClientTelemetryDisabled();
+            return Task.CompletedTask;
+        }
+
+        var userId = context.User?.Id;
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            LogBoundClientMissingUser();
+            return Task.CompletedTask;
+        }
+
+        var trackOptions = options is null
+            ? new ReflagEventTrackOptions
+            {
+                CompanyId = context.Company?.Id,
+            }
+            : new ReflagEventTrackOptions
+            {
+                CompanyId = options.CompanyId ?? context.Company?.Id,
+                Attributes = options.Attributes,
+                Active = options.Active,
+            };
+
+        return TrackAsync(userId!, eventName, trackOptions, cancellationToken);
+    }
+
+    internal ReflagBoundClient BindBoundClient(
+        ReflagContext existingContext,
+        ReflagTelemetryOptions? existingTelemetryOptions,
+        ReflagContext updateContext,
+        ReflagTelemetryOptions? updateTelemetryOptions)
+    {
+        EnsureNotDisposed();
+        var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(updateContext);
+        var normalizedTelemetry = NormalizeTelemetryOptions(updateTelemetryOptions);
+        return Rebind(existingContext, existingTelemetryOptions, normalizedContext, normalizedTelemetry);
+    }
+
+    internal ReflagBoundClient BindBoundClient(
+        ReflagContext existingContext,
+        ReflagTelemetryOptions? existingTelemetryOptions,
+        object updateContext,
+        ReflagTelemetryOptions? updateTelemetryOptions)
+    {
+        EnsureNotDisposed();
+        var normalizedContext = ReflagContextNormalizer.NormalizeLooseContext(updateContext);
+        var normalizedTelemetry = NormalizeTelemetryOptions(updateTelemetryOptions);
+        return Rebind(existingContext, existingTelemetryOptions, normalizedContext, normalizedTelemetry);
+    }
+
     internal ReflagBoundClient Rebind(
         ReflagContext existingContext,
         ReflagTelemetryOptions? existingTelemetryOptions,
@@ -450,6 +503,28 @@ public sealed class ReflagClient : IAsyncDisposable
         {
             _logger.LogWarning(error, "failed to flush buffered events during shutdown");
         }
+    }
+
+    private void SetFlagOverridesCore(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
+    {
+        lock (_overridesGate)
+        {
+            _baseFlagOverrides = NormalizeFlagOverrides(overridesFactory);
+            SyncFlagOverridesNoLock();
+        }
+    }
+
+    private IDisposable PushFlagOverridesCore(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
+    {
+        FlagOverrideLayer layer;
+        lock (_overridesGate)
+        {
+            layer = new FlagOverrideLayer(_nextFlagOverrideLayerId++, NormalizeFlagOverrides(overridesFactory));
+            _flagOverrideLayers.Add(layer);
+            SyncFlagOverridesNoLock();
+        }
+
+        return new FlagOverrideScope(this, layer.Id);
     }
 
     private Task GetOrCreateInitializeTask()
@@ -1641,32 +1716,7 @@ public sealed class ReflagBoundClient
         ReflagEventTrackOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        if (TelemetryOptions?.EnableTelemetry == false)
-        {
-            _rootClient.LogBoundClientTelemetryDisabled();
-            return Task.CompletedTask;
-        }
-
-        var userId = User?.Id;
-        if (string.IsNullOrWhiteSpace(userId))
-        {
-            _rootClient.LogBoundClientMissingUser();
-            return Task.CompletedTask;
-        }
-
-        var trackOptions = options is null
-            ? new ReflagEventTrackOptions
-            {
-                CompanyId = Company?.Id,
-            }
-            : new ReflagEventTrackOptions
-            {
-                CompanyId = options.CompanyId ?? Company?.Id,
-                Attributes = options.Attributes,
-                Active = options.Active,
-            };
-
-        return _rootClient.TrackAsync(userId!, eventName, trackOptions, cancellationToken);
+        return _rootClient.TrackBoundClientAsync(Context, TelemetryOptions, eventName, options, cancellationToken);
     }
 
     public Task FlushAsync(CancellationToken cancellationToken = default)
@@ -1681,13 +1731,11 @@ public sealed class ReflagBoundClient
 
     public ReflagBoundClient BindClient(ReflagContext context, ReflagTelemetryOptions? telemetryOptions = null)
     {
-        var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(context);
-        return _rootClient.Rebind(Context, TelemetryOptions, normalizedContext, telemetryOptions);
+        return _rootClient.BindBoundClient(Context, TelemetryOptions, context, telemetryOptions);
     }
 
     public ReflagBoundClient BindClient(object context, ReflagTelemetryOptions? telemetryOptions = null)
     {
-        var normalizedContext = ReflagContextNormalizer.NormalizeLooseContext(context);
-        return _rootClient.Rebind(Context, TelemetryOptions, normalizedContext, telemetryOptions);
+        return _rootClient.BindBoundClient(Context, TelemetryOptions, context, telemetryOptions);
     }
 }

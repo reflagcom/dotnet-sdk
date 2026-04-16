@@ -151,6 +151,66 @@ public sealed class ReflagClientTests
     }
 
     [Fact]
+    public async Task ReflagClient_public_methods_throw_after_disposal()
+    {
+        var client = new ReflagClient(new ReflagClientOptions
+        {
+            Offline = true,
+        });
+
+        await client.DisposeAsync();
+
+        await AssertDisposedAsync(() => client.InitializeAsync());
+        await AssertDisposedAsync(() => client.FlushAsync());
+        await AssertDisposedAsync(() => client.RefreshFlagsAsync());
+        AssertDisposed(() => client.GetFlagDefinitions());
+        AssertDisposed(() => client.GetFlag("missing-flag", new ReflagContext()));
+        AssertDisposed(() => client.GetFlagsForBootstrap(new ReflagContext()));
+        AssertDisposed(() => client.BindClient(new ReflagContext()));
+        AssertDisposed(() => client.BindClient(new { User = new { Id = "user-123" } }));
+        await AssertDisposedAsync(() => client.UpdateUserAsync("user-123"));
+        await AssertDisposedAsync(() => client.UpdateCompanyAsync("company-123"));
+        await AssertDisposedAsync(() => client.TrackAsync("user-123", "checkout"));
+        AssertDisposed(() => client.SetFlagOverrides(new Dictionary<string, bool> { ["flag-a"] = true }));
+        AssertDisposed(() => client.SetFlagOverrides(static _ => new Dictionary<string, bool> { ["flag-a"] = true }));
+        AssertDisposed(() => client.PushFlagOverrides(new Dictionary<string, bool> { ["flag-a"] = true }));
+        AssertDisposed(() => client.PushFlagOverrides(static _ => new Dictionary<string, bool> { ["flag-a"] = true }));
+        AssertDisposed(() => client.ClearFlagOverrides());
+    }
+
+    [Fact]
+    public async Task ReflagBoundClient_methods_throw_after_root_client_is_disposed()
+    {
+        var client = new ReflagClient(new ReflagClientOptions
+        {
+            Offline = true,
+        });
+
+        var bound = client.BindClient(
+            new ReflagContext
+            {
+                Company = new ReflagCompanyContext
+                {
+                    Id = "company-123",
+                },
+            },
+            new ReflagTelemetryOptions
+            {
+                EnableTelemetry = false,
+            });
+
+        await client.DisposeAsync();
+
+        AssertDisposed(() => bound.GetFlag("missing-flag"));
+        AssertDisposed(() => bound.GetFlagsForBootstrap());
+        await AssertDisposedAsync(() => bound.TrackAsync("checkout"));
+        await AssertDisposedAsync(() => bound.FlushAsync());
+        await AssertDisposedAsync(() => bound.RefreshFlagsAsync());
+        AssertDisposed(() => bound.BindClient(new ReflagContext()));
+        AssertDisposed(() => bound.BindClient(new { User = new { Id = "user-456" } }));
+    }
+
+    [Fact]
     public async Task InitializeAsync_fetches_flags_and_evaluates_locally()
     {
         var transport = new TestTransport();
@@ -316,6 +376,16 @@ public sealed class ReflagClientTests
                     plan = "pro",
                 },
             }));
+    }
+
+    private static void AssertDisposed(Action action)
+    {
+        Assert.Throws<ObjectDisposedException>(action);
+    }
+
+    private static Task AssertDisposedAsync(Func<Task> action)
+    {
+        return Assert.ThrowsAsync<ObjectDisposedException>(action);
     }
 
     private sealed class FeaturesEnvelope
