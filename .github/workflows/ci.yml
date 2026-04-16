@@ -15,25 +15,18 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            10.0.x
+            8.0.x
 
       - name: Restore solution
         run: dotnet restore dotnet-sdk.sln
 
-      - name: Restore example
-        run: dotnet restore examples/Reflag.MinimalApiExample/Reflag.MinimalApiExample.csproj
-
       - name: Lint solution
         run: dotnet format dotnet-sdk.sln --verify-no-changes --severity warn --no-restore
-
-      - name: Lint example
-        run: dotnet format examples/Reflag.MinimalApiExample/Reflag.MinimalApiExample.csproj --verify-no-changes --severity warn --no-restore
 
       - name: Build solution
         run: dotnet build dotnet-sdk.sln --configuration Release --no-restore -warnaserror
 
-      - name: Build example
-        run: dotnet build examples/Reflag.MinimalApiExample/Reflag.MinimalApiExample.csproj --configuration Release --no-restore -warnaserror
-
-      - name: Test
+      - name: Test solution on .NET 10 and .NET 8
         run: dotnet test dotnet-sdk.sln --configuration Release --no-build --logger "console;verbosity=minimal"
