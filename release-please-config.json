@@ -4,6 +4,7 @@
   "packages": {
     ".": {
       "package-name": "Reflag.RuntimeSDK",
+      "component": "reflag-runtime-sdk",
       "changelog-path": "CHANGELOG.md",
       "version-file": "version.txt",
       "initial-version": "0.0.1",
