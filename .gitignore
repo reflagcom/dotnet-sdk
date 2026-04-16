@@ -1,0 +1,28 @@
+# This SDK lives inside a larger JS monorepo whose root .gitignore ignores *.sln.
+# Re-include the local solution so it can be committed from this folder.
+!*.sln
+
+# .NET build output
+**/bin/
+**/obj/
+/artifacts/
+/TestResults/
+**/TestResults/
+/coverage/
+/BenchmarkDotNet.Artifacts/
+
+# NuGet / packaging artifacts
+*.nupkg
+*.snupkg
+
+# IDE / user-specific files
+/.vs/
+/.idea/
+/.vscode/
+*.user
+*.rsuser
+*.userprefs
+*.sln.docstates
+
+# OS cruft
+.DS_Store
