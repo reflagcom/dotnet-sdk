@@ -9,6 +9,7 @@ public sealed class FlagsCacheTests
     public async Task RefreshAsync_runs_follow_up_refresh_with_highest_pending_version()
     {
         var firstRefresh = new TaskCompletionSource<FlagsCacheRefreshResult?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstFetchStarted = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = new List<int?>();
 
         Task<FlagsCacheRefreshResult?> Fetch(int? waitForVersion)
@@ -16,6 +17,7 @@ public sealed class FlagsCacheTests
             calls.Add(waitForVersion);
             if (calls.Count == 1)
             {
+                firstFetchStarted.TrySetResult(null);
                 return firstRefresh.Task;
             }
 
@@ -26,8 +28,8 @@ public sealed class FlagsCacheTests
 
         var cache = new FlagsCache(Fetch, minRefreshInterval: TimeSpan.Zero);
         var refreshTask = cache.RefreshAsync(null, CancellationToken.None);
+        await firstFetchStarted.Task;
 
-        await Task.Delay(10);
         var refresh21Task = cache.RefreshAsync(21, CancellationToken.None);
         var refresh22Task = cache.RefreshAsync(22, CancellationToken.None);
 
