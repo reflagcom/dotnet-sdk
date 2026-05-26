@@ -35,7 +35,7 @@ public sealed class PushSyncTests
                 return;
             }
 
-            if (request.Path == "/sse")
+            if (request.Path == "/sse/server")
             {
                 await AsyncLoopbackServer.WriteSseAsync(
                     context,
@@ -53,7 +53,7 @@ public sealed class PushSyncTests
         {
             SecretKey = SecretKey,
             ApiBaseUrl = server.BaseUri,
-            FlagsPushUrl = new Uri(server.BaseUri, "sse"),
+            FlagsPushUrl = new Uri(server.BaseUri, "sse/server"),
             FlagsFetchRetries = 0,
         });
 
@@ -112,12 +112,9 @@ public sealed class PushSyncTests
                 return;
             }
 
-            if (request.Path == "/sse")
+            if (request.Path == "/sse/server")
             {
-                Assert.Equal("Bearer validSecretKeyWithMoreThan22Chars", request.Headers["Authorization"]);
-                Assert.Equal("text/event-stream", request.Headers["Accept"]);
-                Assert.Equal("no-cache", request.Headers["Cache-Control"]);
-                Assert.Equal($"flags-state:{Hashing.HashString(SecretKey)[..16]}", request.Query["channels"]);
+                AssertServerSseRequest(request);
 
                 await AsyncLoopbackServer.WriteSseAsync(
                     context,
@@ -135,7 +132,7 @@ public sealed class PushSyncTests
         {
             SecretKey = SecretKey,
             ApiBaseUrl = server.BaseUri,
-            FlagsPushUrl = new Uri(server.BaseUri, "sse"),
+            FlagsPushUrl = new Uri(server.BaseUri, "sse/server"),
             FlagsSyncMode = ReflagFlagsSyncMode.Push,
             FlagsFetchRetries = 0,
         });
@@ -151,6 +148,61 @@ public sealed class PushSyncTests
 
         Assert.True(enabled);
         Assert.Contains(server.Requests, request => request.Path == "/features" && request.Query.TryGetValue("waitForVersion", out var value) && value == "2");
+    }
+
+    [Fact]
+    public async Task Push_mode_preserves_custom_flags_push_url_path_and_strips_channels()
+    {
+        var waitForVersionSeen = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
+        {
+            if (request.Path == "/features")
+            {
+                if (request.Query.TryGetValue("waitForVersion", out var waitForVersion) && waitForVersion == "2")
+                {
+                    waitForVersionSeen.TrySetResult(null);
+                }
+
+                await AsyncLoopbackServer.WriteJsonAsync(context, new
+                {
+                    success = true,
+                    flagStateVersion = 1,
+                    features = Array.Empty<object>(),
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            if (request.Path == "/custom/sse")
+            {
+                AssertServerSseRequest(request, "/custom/sse");
+                Assert.Equal("keep", request.Query["foo"]);
+
+                await AsyncLoopbackServer.WriteSseAsync(
+                    context,
+                    "event: message\n" +
+                    "data: {\"name\":\"flags-updated\",\"data\":\"{\\\"flagStateVersion\\\":2}\"}\n\n",
+                    keepOpen: false,
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            await AsyncLoopbackServer.WriteJsonAsync(context, new { success = false }, statusCode: 404).ConfigureAwait(false);
+        });
+
+        await using var client = new ReflagClient(new ReflagClientOptions
+        {
+            SecretKey = SecretKey,
+            ApiBaseUrl = server.BaseUri,
+            FlagsPushUrl = new Uri(server.BaseUri, "custom/sse?channels=legacy-channel&foo=keep"),
+            FlagsSyncMode = ReflagFlagsSyncMode.Push,
+            FlagsFetchRetries = 0,
+        });
+
+        await client.InitializeAsync();
+        await WaitUntilAsync(() => waitForVersionSeen.Task.IsCompleted, TimeSpan.FromSeconds(5));
+
+        Assert.DoesNotContain(server.Requests, request => request.Path == "/sse/server");
     }
 
     [Fact]
@@ -179,7 +231,7 @@ public sealed class PushSyncTests
                 return;
             }
 
-            if (request.Path == "/sse")
+            if (request.Path == "/sse/server")
             {
                 var connectionNumber = Interlocked.Increment(ref sseConnections);
                 if (connectionNumber == 1)
@@ -199,7 +251,7 @@ public sealed class PushSyncTests
         {
             SecretKey = SecretKey,
             ApiBaseUrl = server.BaseUri,
-            FlagsPushUrl = new Uri(server.BaseUri, "sse"),
+            FlagsPushUrl = new Uri(server.BaseUri, "sse/server"),
             FlagsSyncMode = ReflagFlagsSyncMode.Push,
             FlagsFetchRetries = 0,
         });
@@ -265,7 +317,7 @@ public sealed class PushSyncTests
                 return;
             }
 
-            if (request.Path == "/sse")
+            if (request.Path == "/sse/server")
             {
                 context.Response.StatusCode = 200;
                 context.Response.ContentType = "text/event-stream";
@@ -304,7 +356,7 @@ public sealed class PushSyncTests
         {
             SecretKey = SecretKey,
             ApiBaseUrl = server.BaseUri,
-            FlagsPushUrl = new Uri(server.BaseUri, "sse"),
+            FlagsPushUrl = new Uri(server.BaseUri, "sse/server"),
             FlagsSyncMode = ReflagFlagsSyncMode.Push,
             FlagsFetchRetries = 0,
         });
@@ -376,7 +428,7 @@ public sealed class PushSyncTests
                 return;
             }
 
-            if (request.Path == "/sse")
+            if (request.Path == "/sse/server")
             {
                 context.Response.StatusCode = 200;
                 context.Response.ContentType = "text/event-stream";
@@ -416,7 +468,7 @@ public sealed class PushSyncTests
         {
             SecretKey = SecretKey,
             ApiBaseUrl = server.BaseUri,
-            FlagsPushUrl = new Uri(server.BaseUri, "sse"),
+            FlagsPushUrl = new Uri(server.BaseUri, "sse/server"),
             FlagsSyncMode = ReflagFlagsSyncMode.Push,
             FlagsFetchRetries = 0,
             Logger = logger,
@@ -472,7 +524,7 @@ public sealed class PushSyncTests
                 return;
             }
 
-            if (request.Path == "/sse")
+            if (request.Path == "/sse/server")
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "text/plain";
@@ -490,7 +542,7 @@ public sealed class PushSyncTests
         {
             SecretKey = SecretKey,
             ApiBaseUrl = server.BaseUri,
-            FlagsPushUrl = new Uri(server.BaseUri, "sse"),
+            FlagsPushUrl = new Uri(server.BaseUri, "sse/server"),
             FlagsSyncMode = ReflagFlagsSyncMode.Push,
             FlagsFetchRetries = 0,
             Logger = logger,
@@ -500,6 +552,18 @@ public sealed class PushSyncTests
 
         Assert.True(client.GetFlag("f1", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
         Assert.Contains(logger.Entries, entry => entry.Message.Contains("flag updates SSE endpoint returned an invalid response"));
+    }
+
+    private static void AssertServerSseRequest(LoopbackRequest request, string expectedPath = "/sse/server")
+    {
+        Assert.Equal("POST", request.Method);
+        Assert.Equal(expectedPath, request.Path);
+        Assert.Equal("Bearer validSecretKeyWithMoreThan22Chars", request.Headers["Authorization"]);
+        Assert.Equal("text/event-stream", request.Headers["Accept"]);
+        Assert.Equal("no-cache", request.Headers["Cache-Control"]);
+        Assert.False(request.Headers.ContainsKey("Content-Type"));
+        Assert.False(request.Query.ContainsKey("channels"));
+        Assert.Empty(request.Body);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)

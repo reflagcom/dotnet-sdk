@@ -221,7 +221,7 @@ Constructor options currently available:
 | `FlagOverridesFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, bool>>?` | Context-dependent base overrides | - |
 | `Offline` | `bool?` | Disables network I/O | `REFLAG_OFFLINE` |
 | `FlagsSyncMode` | `ReflagFlagsSyncMode?` | Default is `Push` | - |
-| `FlagsPushUrl` | `Uri?` | Override SSE endpoint | - |
+| `FlagsPushUrl` | `Uri?` | Override the push-sync SSE endpoint (`POST /sse/server`) | - |
 
 ## Testing with flag overrides
 

@@ -11,7 +11,7 @@ namespace Reflag.Internal;
 internal static class ReflagConstants
 {
     public const string ApiBaseUrl = "https://front.reflag.com";
-    public const string PubsubSseUrl = "https://pubsub.reflag.com/sse";
+    public const string PubsubSseUrl = "https://pubsub.reflag.com/sse/server";
     public const string SdkVersionHeaderName = "reflag-sdk-version";
     public const string SdkVersion = "dotnet-sdk/0.0.1"; // x-release-please-version
     public static readonly TimeSpan ApiTimeout = TimeSpan.FromMilliseconds(10_000);
@@ -375,8 +375,6 @@ internal sealed class ReflagSseTransportResponse(HttpResponseMessage? response, 
 
     public Stream? Stream { get; } = stream;
 
-    public string? ErrorBody { get; init; }
-
     public void Dispose()
     {
         Stream?.Dispose();
@@ -467,7 +465,7 @@ internal sealed class HttpClientTransport : IDisposable
         IReadOnlyDictionary<string, string> headers,
         CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
         AddHeaders(request, headers);
 
         var response = await _httpClient.SendAsync(
@@ -477,29 +475,11 @@ internal sealed class HttpClientTransport : IDisposable
 
         if (!response.IsSuccessStatusCode || response.Content is null)
         {
-            string? errorBody = null;
-            if (response.Content is not null)
-            {
-                try
-                {
-                    var rawBody = await ReadAsStringAsync(response.Content, cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(rawBody))
-                    {
-                        errorBody = rawBody.Length > 1000 ? $"{rawBody.Substring(0, 1000)}..." : rawBody;
-                    }
-                }
-                catch
-                {
-                    // ignore body read errors
-                }
-            }
-
             var invalidResponse = new ReflagSseTransportResponse(null, null)
             {
                 StatusCode = (int)response.StatusCode,
                 IsSuccessStatusCode = response.IsSuccessStatusCode,
                 ReasonPhrase = response.ReasonPhrase,
-                ErrorBody = errorBody,
             };
 
             response.Dispose();
@@ -534,15 +514,6 @@ internal sealed class HttpClientTransport : IDisposable
         var deserialized = await JsonSerializer.DeserializeAsync<TResponse>(stream, ReflagJson.Options, cancellationToken)
             .ConfigureAwait(false);
         return deserialized;
-    }
-
-    private static Task<string> ReadAsStringAsync(HttpContent content, CancellationToken cancellationToken)
-    {
-#if NETSTANDARD2_0
-        return AsyncHelpers.WaitAsync(content.ReadAsStringAsync(), cancellationToken);
-#else
-        return content.ReadAsStringAsync(cancellationToken);
-#endif
     }
 
     private static Task<Stream> ReadAsStreamAsync(HttpContent content, CancellationToken cancellationToken)
