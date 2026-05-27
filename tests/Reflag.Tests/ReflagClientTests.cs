@@ -263,7 +263,7 @@ public sealed class ReflagClientTests
         Assert.True(bootstrapped.Flags["new-dashboard"].Value);
         Assert.Equal(1, bootstrapped.FlagStateVersion);
         Assert.Equal("https://api.example.com/path/features", transport.GetCalls.Single().Url.ToString());
-        Assert.Equal("dotnet-sdk/0.0.1", transport.GetCalls.Single().Headers["reflag-sdk-version"]); // x-release-please-version
+        Assert.Equal("dotnet-sdk/0.1.0", transport.GetCalls.Single().Headers["reflag-sdk-version"]); // x-release-please-version
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Information && entry.Message.Contains("Reflag initialized in"));
     }
 
