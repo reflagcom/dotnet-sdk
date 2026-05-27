@@ -11,7 +11,7 @@ namespace Reflag.Internal;
 internal static class ReflagConstants
 {
     public const string ApiBaseUrl = "https://front.reflag.com";
-    public const string PubsubSseUrl = "https://pubsub.reflag.com/sse/server";
+    public const string PubsubSseUrl = "https://front.reflag.com/sse/server";
     public const string SdkVersionHeaderName = "reflag-sdk-version";
     public const string SdkVersion = "dotnet-sdk/0.0.1"; // x-release-please-version
     public static readonly TimeSpan ApiTimeout = TimeSpan.FromMilliseconds(10_000);
