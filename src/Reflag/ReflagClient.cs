@@ -69,7 +69,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         var secretKeyHash = secretKey is null ? string.Empty : Hashing.HashString(secretKey);
-        var flagsPushUrl = ResolveFlagsPushUrl(syncMode, options.FlagsPushUrl, secretKeyHash);
+        var flagsPushUrl = ResolveFlagsPushUrl(options.FlagsPushUrl);
         _logger = options.Logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 
         _transport = new HttpClientTransport(options.HttpClient, ownsHttpClient: options.HttpClient is null);
@@ -1237,7 +1237,7 @@ public sealed class ReflagClient : IAsyncDisposable
         return uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri($"{uri.AbsoluteUri}/");
     }
 
-    private static Uri ResolveFlagsPushUrl(ReflagFlagsSyncMode syncMode, Uri? flagsPushUrl, string secretKeyHash)
+    private static Uri ResolveFlagsPushUrl(Uri? flagsPushUrl)
     {
         var resolved = flagsPushUrl ?? new Uri(ReflagConstants.PubsubSseUrl);
         if (!resolved.IsAbsoluteUri)
@@ -1245,24 +1245,18 @@ public sealed class ReflagClient : IAsyncDisposable
             throw new ArgumentException("flagsPushUrl must be an absolute URI.", nameof(flagsPushUrl));
         }
 
-        if (syncMode != ReflagFlagsSyncMode.Push || string.IsNullOrEmpty(secretKeyHash))
-        {
-            return resolved;
-        }
+        return RemoveChannelsQueryParameter(resolved);
+    }
 
-        var queryParameters = QueryStringHelpers.Parse(resolved.Query);
-        if (queryParameters.Any(parameter => string.Equals(parameter.Key, "channels", StringComparison.OrdinalIgnoreCase)))
-        {
-            return resolved;
-        }
+    private static Uri RemoveChannelsQueryParameter(Uri url)
+    {
+        var filteredQueryParameters = QueryStringHelpers.Parse(url.Query)
+            .Where(parameter => !string.Equals(parameter.Key, "channels", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
-        queryParameters.Add(new KeyValuePair<string, string>(
-            "channels",
-            $"flags-state:{secretKeyHash.Substring(0, Math.Min(16, secretKeyHash.Length))}"));
-
-        var builder = new UriBuilder(resolved)
+        var builder = new UriBuilder(url)
         {
-            Query = string.Join("&", queryParameters.Select(parameter => $"{Uri.EscapeDataString(parameter.Key)}={Uri.EscapeDataString(parameter.Value)}")),
+            Query = string.Join("&", filteredQueryParameters.Select(parameter => $"{Uri.EscapeDataString(parameter.Key)}={Uri.EscapeDataString(parameter.Value)}")),
         };
 
         return builder.Uri;

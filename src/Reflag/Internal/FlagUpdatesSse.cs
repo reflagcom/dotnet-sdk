@@ -118,18 +118,13 @@ internal sealed class FlagUpdatesSseSubscription : IAsyncDisposable
             {
                 var reason = response.ReasonPhrase ?? string.Empty;
                 var message = $"{response.StatusCode} {reason}".TrimEnd();
-                if (!string.IsNullOrEmpty(response.ErrorBody))
-                {
-                    message += $" - {response.ErrorBody}";
-                }
-
                 _logger.LogWarning("flag updates SSE endpoint returned an invalid response: {Message}", message);
                 _ready.TrySetResult(null);
                 return;
             }
 
             _reconnectDelay = _initialReconnectDelay;
-            _logger.LogDebug("flag updates SSE connection established (channels={Channels})", QueryStringHelpers.GetValue(_url.Query, "channels") ?? string.Empty);
+            _logger.LogDebug("flag updates SSE connection established");
             _ready.TrySetResult(null);
 
             if (_shouldNotifyReconnect)
