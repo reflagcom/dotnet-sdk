@@ -98,6 +98,8 @@ public sealed class ReflagEndToEndTests
         Assert.True(enabled);
         Assert.False(disabled);
 
+        Assert.Equal(123, bootstrapped.FlagStateVersion);
+
         var bootstrappedFlag = bootstrapped.Flags["new-dashboard"];
         Assert.True(bootstrappedFlag.Value);
         Assert.Equal(7, bootstrappedFlag.TargetingVersion);

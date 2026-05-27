@@ -144,6 +144,9 @@ public sealed class ReflagBootstrappedFlags
 
     public IReadOnlyDictionary<string, RawReflagFlag> Flags { get; init; } =
         new Dictionary<string, RawReflagFlag>();
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FlagStateVersion { get; init; }
 }
 
 /// <summary>

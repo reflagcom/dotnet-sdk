@@ -261,6 +261,7 @@ public sealed class ReflagClientTests
 
         Assert.True(enabled);
         Assert.True(bootstrapped.Flags["new-dashboard"].Value);
+        Assert.Equal(1, bootstrapped.FlagStateVersion);
         Assert.Equal("https://api.example.com/path/features", transport.GetCalls.Single().Url.ToString());
         Assert.Equal("dotnet-sdk/0.0.1", transport.GetCalls.Single().Headers["reflag-sdk-version"]); // x-release-please-version
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Information && entry.Message.Contains("Reflag initialized in"));
@@ -285,6 +286,7 @@ public sealed class ReflagClientTests
 
         Assert.True(enabled);
         Assert.True(bootstrapped.Flags["forced-flag"].Value);
+        Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Error && entry.Message.Contains("flag access: ReflagClient is not initialized yet."));
     }
 
@@ -351,9 +353,12 @@ public sealed class ReflagClientTests
 
         await client.InitializeAsync();
         var enabled = client.GetFlag("fallback-flag", new ReflagContext());
+        var bootstrapped = client.GetFlagsForBootstrap(new ReflagContext());
         var definitions = client.GetFlagDefinitions();
 
         Assert.True(enabled);
+        Assert.True(bootstrapped.Flags["fallback-flag"].Value);
+        Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Single(definitions);
         Assert.Equal(0, definitions[0].Targeting.Version);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("remote flags unavailable, using fallback flags fetched"));

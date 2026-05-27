@@ -375,6 +375,8 @@ public sealed class PushSyncTests
         await WaitUntilAsync(
             () => client.GetFlag("f1", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }),
             TimeSpan.FromSeconds(5));
+
+        Assert.Equal(2, client.GetFlagsForBootstrap(new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }).FlagStateVersion);
     }
 
     [Fact]
