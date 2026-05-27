@@ -556,7 +556,7 @@ public sealed class PushSyncTests
 
     private static void AssertServerSseRequest(LoopbackRequest request, string expectedPath = "/sse/server")
     {
-        Assert.Equal("POST", request.Method);
+        Assert.Equal("GET", request.Method);
         Assert.Equal(expectedPath, request.Path);
         Assert.Equal("Bearer validSecretKeyWithMoreThan22Chars", request.Headers["Authorization"]);
         Assert.Equal("text/event-stream", request.Headers["Accept"]);

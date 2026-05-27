@@ -465,7 +465,7 @@ internal sealed class HttpClientTransport : IDisposable
         IReadOnlyDictionary<string, string> headers,
         CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
         AddHeaders(request, headers);
 
         var response = await _httpClient.SendAsync(
