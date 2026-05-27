@@ -209,6 +209,7 @@ public sealed class ReflagClient : IAsyncDisposable
         {
             Context = normalizedContext,
             Flags = flags,
+            FlagStateVersion = _flagsCache.GetFlagStateVersion(),
         };
     }
 

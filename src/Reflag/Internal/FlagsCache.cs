@@ -54,6 +54,14 @@ internal sealed class FlagsCache
         }
     }
 
+    public int? GetFlagStateVersion()
+    {
+        lock (_gate)
+        {
+            return _flagStateVersion;
+        }
+    }
+
     public async Task<CompiledFlagDefinition[]?> RefreshAsync(int? waitForVersion, CancellationToken cancellationToken)
     {
         Task? waiterTask;

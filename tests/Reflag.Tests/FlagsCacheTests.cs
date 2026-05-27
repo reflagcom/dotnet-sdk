@@ -40,6 +40,7 @@ public sealed class FlagsCacheTests
 
         Assert.Equal(new int?[] { null, 22 }, calls);
         Assert.Equal("newest", cache.Get()![0].Definition.Key);
+        Assert.Equal(22, cache.GetFlagStateVersion());
         cache.Destroy();
     }
 
@@ -60,6 +61,7 @@ public sealed class FlagsCacheTests
         await cache.RefreshAsync(null, CancellationToken.None);
 
         Assert.Equal("newer", cache.Get()![0].Definition.Key);
+        Assert.Equal(30, cache.GetFlagStateVersion());
         cache.Destroy();
     }
 
