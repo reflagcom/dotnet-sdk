@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.0.1...v0.1.0) (2026-05-27)
+
+
+### Features
+
+* include flag state version in bootstrap flags ([#11](https://github.com/reflagcom/dotnet-sdk/issues/11)) ([8202fe3](https://github.com/reflagcom/dotnet-sdk/commit/8202fe34c1044e3a50c56226cc1d465386307f28))
+
+
+### Bug Fixes
+
+* Update flag push sync to server SSE endpoint ([#9](https://github.com/reflagcom/dotnet-sdk/issues/9)) ([341fd5f](https://github.com/reflagcom/dotnet-sdk/commit/341fd5fb0576c846e59efdbe63637ec9cd2796c0))
+
 ## 0.0.1 (2026-04-16)
 
 

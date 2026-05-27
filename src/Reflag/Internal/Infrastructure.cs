@@ -13,7 +13,7 @@ internal static class ReflagConstants
     public const string ApiBaseUrl = "https://front.reflag.com";
     public const string PubsubSseUrl = "https://front.reflag.com/sse/server";
     public const string SdkVersionHeaderName = "reflag-sdk-version";
-    public const string SdkVersion = "dotnet-sdk/0.0.1"; // x-release-please-version
+    public const string SdkVersion = "dotnet-sdk/0.1.0"; // x-release-please-version
     public static readonly TimeSpan ApiTimeout = TimeSpan.FromMilliseconds(10_000);
     public static readonly TimeSpan FlagsRefetchInterval = TimeSpan.FromMilliseconds(60_000);
     public static readonly TimeSpan MinRefreshInterval = TimeSpan.FromMilliseconds(1_000);
