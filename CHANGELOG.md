@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.1.0...v0.2.0) (2026-09-15)
+
+
+### Features
+
+* support array targeting and evaluation diagnostics ([#12](https://github.com/reflagcom/dotnet-sdk/issues/12)) ([515706d](https://github.com/reflagcom/dotnet-sdk/commit/515706d06a9b48a993cf1be343685ce30103fa56))
+
+
+### Bug Fixes
+
+* preserve context types in check-event deduplication ([#13](https://github.com/reflagcom/dotnet-sdk/issues/13)) ([46abb21](https://github.com/reflagcom/dotnet-sdk/commit/46abb21736896e767f67a7c7dedd65e4cf3ca1c2))
+
 ## [0.1.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.0.1...v0.1.0) (2026-05-27)
 
 
