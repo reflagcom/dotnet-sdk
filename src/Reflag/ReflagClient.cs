@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Reflag.Internal;
@@ -183,7 +184,7 @@ public sealed class ReflagClient : IAsyncDisposable
         var definitions = GetDefinitionsForLocalEvaluation();
         var rawFlag = EvaluateFlag(key, normalizedContext, definitions);
 
-        WarnMissingFlagContextFields(normalizedContext, rawFlag);
+        WarnFlagEvaluationDiagnostics(rawFlag);
         TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag);
         return rawFlag.Value;
     }
@@ -615,6 +616,7 @@ public sealed class ReflagClient : IAsyncDisposable
                 TargetingVersion = definition.Definition.Targeting.Version,
                 RuleEvaluationResults = result.RuleEvaluationResults,
                 MissingContextFields = result.MissingContextFields,
+                Errors = result.Errors.Count > 0 ? result.Errors : null,
             };
         }
 
@@ -647,6 +649,7 @@ public sealed class ReflagClient : IAsyncDisposable
                 TargetingVersion = definition.Definition.Targeting.Version,
                 RuleEvaluationResults = evaluation.RuleEvaluationResults,
                 MissingContextFields = evaluation.MissingContextFields,
+                Errors = evaluation.Errors.Count > 0 ? evaluation.Errors : null,
             };
         }
 
@@ -947,20 +950,21 @@ public sealed class ReflagClient : IAsyncDisposable
         }
     }
 
-    private void WarnMissingFlagContextFields(ReflagContext context, RawReflagFlag flag)
+    private void WarnFlagEvaluationDiagnostics(RawReflagFlag flag)
     {
-        if (flag.MissingContextFields is not { Count: > 0 })
+        if (flag.Errors is not { Count: > 0 })
         {
             return;
         }
 
-        var evaluationContext = ReflagContextNormalizer.ToEvaluationObject(context);
         var warningKey = HashObjectSerializer.HashObject(new Dictionary<string, object?>
         {
-            ["type"] = "missing-context-warning",
+            ["type"] = "evaluation-warning",
             ["flagKey"] = flag.Key,
-            ["missingContextFields"] = flag.MissingContextFields.ToArray(),
-            ["evalContext"] = evaluationContext,
+            ["errors"] = JsonSerializer.Serialize(flag.Errors
+                .OrderBy(error => error.Code, StringComparer.Ordinal)
+                .ThenBy(error => error.Field, StringComparer.Ordinal)
+                .ThenBy(error => error.Operator, StringComparer.Ordinal)),
         });
 
         if (!_rateLimiter.IsAllowed(warningKey))
@@ -969,10 +973,10 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _logger.LogWarning(
-            "flag targeting rules might not be correctly evaluated due to missing context fields. {MissingContextFields}",
-            new Dictionary<string, IReadOnlyList<string>>
+            "flag targeting rules might not be correctly evaluated. {EvaluationErrors}",
+            new Dictionary<string, IReadOnlyList<ReflagEvaluationError>>
             {
-                [flag.Key] = flag.MissingContextFields,
+                [flag.Key] = flag.Errors,
             });
     }
 
@@ -1036,6 +1040,7 @@ public sealed class ReflagClient : IAsyncDisposable
                 EvalContext = evaluationContext,
                 EvalRuleResults = flag.RuleEvaluationResults,
                 EvalMissingFields = flag.MissingContextFields,
+                EvalErrors = flag.Errors,
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -1416,6 +1421,10 @@ public sealed class ReflagClient : IAsyncDisposable
 
         [JsonPropertyName("evalMissingFields")]
         public IReadOnlyList<string>? EvalMissingFields { get; init; }
+
+        [JsonPropertyName("evalErrors")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<ReflagEvaluationError>? EvalErrors { get; init; }
     }
 
     private readonly record struct FlagOverrideLayer(int Id, Func<ReflagContext, IReadOnlyDictionary<string, bool>> Factory);

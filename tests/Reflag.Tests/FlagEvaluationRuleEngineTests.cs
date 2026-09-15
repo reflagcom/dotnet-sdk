@@ -252,8 +252,9 @@ public sealed class FlagEvaluationRuleEngineTests
                 },
             });
 
-        Assert.Equal("matched", result.Value);
-        Assert.Equal(new[] { true }, result.RuleEvaluationResults);
+        // A visited invalid branch fails the whole rule, even if another OR branch matches.
+        Assert.Null(result.Value);
+        Assert.Equal(new[] { false }, result.RuleEvaluationResults);
         Assert.Equal(new[] { "user.role" }, result.MissingContextFields);
     }
 
