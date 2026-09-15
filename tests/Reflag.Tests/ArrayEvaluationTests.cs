@@ -127,7 +127,9 @@ public sealed class ArrayEvaluationTests
     {
         var result = Run(new FlagPercentageRolloutFilterDefinition
         {
-            Key = "flag", PartialRolloutAttribute = "roles", PartialRolloutThreshold = 100000,
+            Key = "flag",
+            PartialRolloutAttribute = "roles",
+            PartialRolloutThreshold = 100000,
         }, new Dictionary<string, object?> { ["roles"] = new[] { "admin" } });
         Assert.False(result.Value);
         Assert.Equal("rolloutPercentage", Assert.Single(result.Errors).Operator);
@@ -135,7 +137,9 @@ public sealed class ArrayEvaluationTests
 
     private static FlagContextFilterDefinition ContextFilter(FlagContextFilterOperator op) => new()
     {
-        Field = "roles", Operator = op, Values = ["admin"],
+        Field = "roles",
+        Operator = op,
+        Values = ["admin"],
     };
 
     private static EvaluationResult<bool> Evaluate(FlagContextFilterOperator op, object value) =>
