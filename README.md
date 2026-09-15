@@ -89,6 +89,7 @@ After that, `GetFlag(...)` and `GetFlagsForBootstrap(...)` evaluate flags locall
 
 The SDK keeps definitions fresh in the background using push sync by default. You can switch to polling mode instead.
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
+Check-event deduplication preserves context JSON types and array order while ignoring object-key order, including nested objects.
 
 ### Array-valued context and diagnostics
 

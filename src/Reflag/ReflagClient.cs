@@ -1047,17 +1047,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
     private static string BuildContextKey(IReadOnlyDictionary<string, object?> context)
     {
-        var flattenedContext = FlagEvaluation.FlattenJson(context);
-        if (flattenedContext.Count == 0)
-        {
-            return string.Empty;
-        }
-
-        return string.Join(
-            "&",
-            flattenedContext
-                .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
-                .Select(pair => $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
+        return CanonicalContextJson.Serialize(context);
     }
 
     private void SyncFlagOverridesNoLock()
