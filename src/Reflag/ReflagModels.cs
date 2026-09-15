@@ -125,6 +125,23 @@ public sealed class ReflagEventTrackOptions : ReflagTrackOptions
     public string? CompanyId { get; init; }
 }
 
+/// <summary>A non-fatal diagnostic from evaluating a targeting rule.</summary>
+public sealed class ReflagEvaluationError
+{
+    [JsonPropertyName("code")]
+    public string Code { get; init; } = string.Empty;
+
+    [JsonPropertyName("field")]
+    public string Field { get; init; } = string.Empty;
+
+    [JsonPropertyName("operator")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Operator { get; init; }
+
+    [JsonPropertyName("message")]
+    public string Message { get; init; } = string.Empty;
+}
+
 public sealed class RawReflagFlag
 {
     public string Key { get; init; } = string.Empty;
@@ -135,7 +152,12 @@ public sealed class RawReflagFlag
 
     public IReadOnlyList<bool>? RuleEvaluationResults { get; init; }
 
+    /// <summary>Legacy missing-field diagnostics. Prefer <see cref="Errors" />.</summary>
     public IReadOnlyList<string>? MissingContextFields { get; init; }
+
+    [JsonPropertyName("evaluationErrors")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ReflagEvaluationError>? Errors { get; init; }
 }
 
 public sealed class ReflagBootstrappedFlags

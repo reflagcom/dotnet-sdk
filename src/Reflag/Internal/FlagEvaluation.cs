@@ -1,5 +1,7 @@
 using System.Collections;
 using System.Globalization;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace Reflag.Internal;
 
@@ -9,13 +11,15 @@ internal sealed class EvaluationResult<T>
 
     public T? Value { get; init; }
 
-    public IReadOnlyDictionary<string, string> Context { get; init; } = new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, object?> Context { get; init; } = new Dictionary<string, object?>();
 
     public IReadOnlyList<bool> RuleEvaluationResults { get; init; } = Array.Empty<bool>();
 
     public string Reason { get; init; } = string.Empty;
 
     public IReadOnlyList<string> MissingContextFields { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<ReflagEvaluationError> Errors { get; init; } = Array.Empty<ReflagEvaluationError>();
 }
 
 internal sealed record EvaluationRule<T>(CompiledFilter Filter, T Value);
@@ -23,16 +27,16 @@ internal sealed record EvaluationRule<T>(CompiledFilter Filter, T Value);
 internal abstract class CompiledFilter
 {
     public abstract bool Evaluate(
-        IReadOnlyDictionary<string, string> context,
-        OrderedStringSet missingContextFields,
+        IReadOnlyDictionary<string, object?> context,
+        EvaluationErrors missingContextFields,
         DateTimeOffset now);
 }
 
 internal sealed class CompiledConstantFilter(bool value) : CompiledFilter
 {
     public override bool Evaluate(
-        IReadOnlyDictionary<string, string> context,
-        OrderedStringSet missingContextFields,
+        IReadOnlyDictionary<string, object?> context,
+        EvaluationErrors missingContextFields,
         DateTimeOffset now)
     {
         return value;
@@ -42,8 +46,8 @@ internal sealed class CompiledConstantFilter(bool value) : CompiledFilter
 internal sealed class CompiledNegationFilter(CompiledFilter filter) : CompiledFilter
 {
     public override bool Evaluate(
-        IReadOnlyDictionary<string, string> context,
-        OrderedStringSet missingContextFields,
+        IReadOnlyDictionary<string, object?> context,
+        EvaluationErrors missingContextFields,
         DateTimeOffset now)
     {
         return !filter.Evaluate(context, missingContextFields, now);
@@ -53,8 +57,8 @@ internal sealed class CompiledNegationFilter(CompiledFilter filter) : CompiledFi
 internal sealed class CompiledGroupFilter(string groupOperator, IReadOnlyList<CompiledFilter> filters) : CompiledFilter
 {
     public override bool Evaluate(
-        IReadOnlyDictionary<string, string> context,
-        OrderedStringSet missingContextFields,
+        IReadOnlyDictionary<string, object?> context,
+        EvaluationErrors missingContextFields,
         DateTimeOffset now)
     {
         if (string.Equals(groupOperator, "and", StringComparison.OrdinalIgnoreCase))
@@ -89,8 +93,8 @@ internal sealed class CompiledContextFilter(
     HashSet<string>? valueSet) : CompiledFilter
 {
     public override bool Evaluate(
-        IReadOnlyDictionary<string, string> context,
-        OrderedStringSet missingContextFields,
+        IReadOnlyDictionary<string, object?> context,
+        EvaluationErrors missingContextFields,
         DateTimeOffset now)
     {
         if (!context.TryGetValue(field, out var fieldValue))
@@ -106,7 +110,26 @@ internal sealed class CompiledContextFilter(
             }
         }
 
-        return FlagEvaluation.Evaluate(fieldValue, @operator, values, valueSet, now);
+        if (fieldValue is string[] array)
+        {
+            var comparison = values.Count > 0 ? values[0] : string.Empty;
+            switch (@operator)
+            {
+                case FlagContextFilterOperator.Is: return array.Length == 1 && array[0] == comparison;
+                case FlagContextFilterOperator.IsNot: return array.Length != 1 || array[0] != comparison;
+                case FlagContextFilterOperator.Contains: return array.Contains(comparison);
+                case FlagContextFilterOperator.NotContains: return !array.Contains(comparison);
+                case FlagContextFilterOperator.AnyOf: return array.Any(value => valueSet?.Contains(value) ?? values.Contains(value));
+                case FlagContextFilterOperator.NotAnyOf: return !array.Any(value => valueSet?.Contains(value) ?? values.Contains(value));
+                case FlagContextFilterOperator.Set: return array.Length > 0;
+                case FlagContextFilterOperator.NotSet: return array.Length == 0;
+                default:
+                    missingContextFields.AddUnsupportedArray(field, JsonSerializer.Serialize(@operator, ReflagJson.Options).Trim('"'));
+                    return false;
+            }
+        }
+
+        return FlagEvaluation.Evaluate((string)fieldValue!, @operator, values, valueSet, now);
     }
 }
 
@@ -116,8 +139,8 @@ internal sealed class CompiledRolloutPercentageFilter(
     int partialRolloutThreshold) : CompiledFilter
 {
     public override bool Evaluate(
-        IReadOnlyDictionary<string, string> context,
-        OrderedStringSet missingContextFields,
+        IReadOnlyDictionary<string, object?> context,
+        EvaluationErrors missingContextFields,
         DateTimeOffset now)
     {
         if (!context.TryGetValue(partialRolloutAttribute, out var attributeValue))
@@ -126,40 +149,80 @@ internal sealed class CompiledRolloutPercentageFilter(
             return false;
         }
 
+        if (attributeValue is string[])
+        {
+            missingContextFields.AddUnsupportedArray(partialRolloutAttribute, "rolloutPercentage");
+            return false;
+        }
+
         return Hashing.HashInt($"{key}.{attributeValue}") < partialRolloutThreshold;
     }
 }
 
-internal sealed class OrderedStringSet
+internal sealed class EvaluationErrors
 {
-    private readonly HashSet<string> _set = new(StringComparer.Ordinal);
-    private readonly List<string> _values = new();
+    private readonly HashSet<(string Code, string Field, string? Operator)> _keys = new();
+    private readonly List<ReflagEvaluationError> _values = new();
 
-    public void Add(string value)
+    public IReadOnlyList<ReflagEvaluationError> Values => _values;
+
+    public void Add(string field) => Add(new ReflagEvaluationError
     {
-        if (_set.Add(value))
+        Code = "MISSING_CONTEXT_FIELD",
+        Field = field,
+        Message = $"Context field \"{field}\" is required to evaluate targeting rules.",
+    });
+
+    public void AddUnsupportedArray(string field, string @operator) => Add(new ReflagEvaluationError
+    {
+        Code = "UNSUPPORTED_ARRAY_OPERATOR",
+        Field = field,
+        Operator = @operator,
+        Message = @operator == "rolloutPercentage"
+            ? $"Percentage rollout does not support array-valued context field \"{field}\"."
+            : $"Operator {@operator} does not support array-valued context field \"{field}\".",
+    });
+
+    public void Add(ReflagEvaluationError error)
+    {
+        if (_keys.Add((error.Code, error.Field, error.Operator)))
         {
-            _values.Add(value);
+            _values.Add(error);
         }
-    }
-
-    public IReadOnlyList<string> ToList()
-    {
-        return _values.ToArray();
     }
 }
 
 internal static class FlagEvaluation
 {
+    private static readonly JsonSerializerOptions ArrayElementJsonOptions = new()
+    {
+        // Match JSON.stringify's escaping of Unicode and HTML-sensitive characters for
+        // exact composite-array comparisons. This is an internal comparison string,
+        // not JSON embedded in HTML; normal transport serialization still escapes it.
+        // This does not guarantee JavaScript parity for number formatting or key ordering.
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     public static IReadOnlyDictionary<string, string> FlattenJson(object? data)
     {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         if (data is null)
         {
-            return result;
+            return new Dictionary<string, string>();
         }
 
-        Recurse(data, string.Empty, result);
+        Recurse(data, string.Empty, result, preserveArrays: false);
+        return result.ToDictionary(pair => pair.Key, pair => (string)pair.Value!, StringComparer.Ordinal);
+    }
+
+    public static IReadOnlyDictionary<string, object?> FlattenContext(object? data)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        if (data is not null)
+        {
+            Recurse(data, string.Empty, result, preserveArrays: true);
+        }
+
         return result;
     }
 
@@ -234,14 +297,20 @@ internal static class FlagEvaluation
         IReadOnlyList<EvaluationRule<T>> rules,
         IReadOnlyDictionary<string, object?> context)
     {
-        var flattenedContext = FlattenJson(context);
-        var missingContextFields = new OrderedStringSet();
+        var flattenedContext = FlattenContext(context);
+        var errors = new EvaluationErrors();
         var now = DateTimeOffset.UtcNow;
 
         var ruleEvaluationResults = new bool[rules.Count];
         for (var index = 0; index < rules.Count; index++)
         {
-            ruleEvaluationResults[index] = rules[index].Filter.Evaluate(flattenedContext, missingContextFields, now);
+            var ruleErrors = new EvaluationErrors();
+            var matched = rules[index].Filter.Evaluate(flattenedContext, ruleErrors, now);
+            ruleEvaluationResults[index] = ruleErrors.Values.Count == 0 && matched;
+            foreach (var error in ruleErrors.Values)
+            {
+                errors.Add(error);
+            }
         }
 
         var firstMatchIndex = Array.FindIndex(ruleEvaluationResults, static value => value);
@@ -254,7 +323,8 @@ internal static class FlagEvaluation
             Context = flattenedContext,
             RuleEvaluationResults = ruleEvaluationResults,
             Reason = firstMatchIndex >= 0 ? $"rule #{firstMatchIndex} matched" : "no matched rules",
-            MissingContextFields = missingContextFields.ToList(),
+            MissingContextFields = errors.Values.Where(error => error.Code == "MISSING_CONTEXT_FIELD").Select(error => error.Field).ToArray(),
+            Errors = errors.Values.ToArray(),
         };
     }
 
@@ -353,7 +423,7 @@ internal static class FlagEvaluation
         return after ? fieldDate >= comparisonDate : fieldDate <= comparisonDate;
     }
 
-    private static void Recurse(object? value, string path, IDictionary<string, string> result)
+    private static void Recurse(object? value, string path, IDictionary<string, object?> result, bool preserveArrays)
     {
         if (value is null)
         {
@@ -377,13 +447,13 @@ internal static class FlagEvaluation
 
         if (value is IReadOnlyDictionary<string, object?> readOnlyDictionary)
         {
-            RecurseDictionary(readOnlyDictionary, path, result);
+            RecurseDictionary(readOnlyDictionary, path, result, preserveArrays);
             return;
         }
 
         if (value is IDictionary<string, object?> dictionary)
         {
-            RecurseDictionary(dictionary, path, result);
+            RecurseDictionary(dictionary, path, result, preserveArrays);
             return;
         }
 
@@ -400,18 +470,28 @@ internal static class FlagEvaluation
                 normalized[Convert.ToString(entry.Key, CultureInfo.InvariantCulture) ?? string.Empty] = entry.Value;
             }
 
-            RecurseDictionary(normalized, path, result);
+            RecurseDictionary(normalized, path, result, preserveArrays);
             return;
         }
 
         if (value is IEnumerable enumerable and not string)
         {
+            if (preserveArrays)
+            {
+                result[path] = enumerable.Cast<object?>().Select(item => item is null
+                    ? string.Empty
+                    : ReflectionHelpers.IsScalarLike(item)
+                        ? ReflectionHelpers.ConvertToFlatString(item)
+                        : JsonSerializer.Serialize(item, ArrayElementJsonOptions)).ToArray();
+                return;
+            }
+
             var index = 0;
             var hadAny = false;
             foreach (var item in enumerable)
             {
                 hadAny = true;
-                Recurse(item, path.Length == 0 ? index.ToString(CultureInfo.InvariantCulture) : $"{path}.{index.ToString(CultureInfo.InvariantCulture)}", result);
+                Recurse(item, path.Length == 0 ? index.ToString(CultureInfo.InvariantCulture) : $"{path}.{index.ToString(CultureInfo.InvariantCulture)}", result, preserveArrays);
                 index++;
             }
 
@@ -426,19 +506,21 @@ internal static class FlagEvaluation
         RecurseDictionary(
             ReflectionHelpers.EnumerateReadableProperties(value).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal),
             path,
-            result);
+            result,
+            preserveArrays);
     }
 
     private static void RecurseDictionary(
         IEnumerable<KeyValuePair<string, object?>> values,
         string path,
-        IDictionary<string, string> result)
+        IDictionary<string, object?> result,
+        bool preserveArrays)
     {
         var hadAny = false;
         foreach (var (key, nestedValue) in values)
         {
             hadAny = true;
-            Recurse(nestedValue, path.Length == 0 ? key : $"{path}.{key}", result);
+            Recurse(nestedValue, path.Length == 0 ? key : $"{path}.{key}", result, preserveArrays);
         }
 
         if (!hadAny && path.Length > 0)

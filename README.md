@@ -91,6 +91,32 @@ The SDK keeps definitions fresh in the background using push sync by default. Yo
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
 Check-event deduplication preserves context JSON types and array order while ignoring object-key order, including nested objects.
 
+### Array-valued context and diagnostics
+
+Context attributes can contain native arrays, for example:
+
+```csharp
+var context = ReflagContext.From(new
+{
+    User = new { Id = "user-123", Roles = new[] { "admin", "editor" } },
+});
+```
+
+For array fields:
+
+- `ANY_OF` / `NOT_ANY_OF` test intersection with the comparison values.
+- `CONTAINS` / `NOT_CONTAINS` test exact, case-sensitive element membership.
+- `IS` matches exactly one matching element; `IS_NOT` is its inverse.
+- `SET` means non-empty; `NOT_SET` means empty.
+
+Primitive elements are normalized to strings (null becomes `""`); composite elements are JSON-encoded. JSON-looking strings remain scalar strings. Scalar operator behavior is unchanged.
+
+Numeric, date, boolean, and percentage-rollout operators do not support arrays. Unsupported operations and required missing fields produce non-fatal diagnostics and **fail the entire affected rule closed**, even inside negations or otherwise-matching OR groups. Later rules can still match.
+
+Diagnostics are available as `RawReflagFlag.Errors` in bootstrap results, logged with rate limiting, and sent as `evalErrors` in flag-check telemetry. Bootstrap JSON uses `evaluationErrors` for compatibility with JavaScript clients. Legacy `MissingContextFields` / `evalMissingFields` remain available.
+
+**Release prerequisite:** the ingest service must support `evalErrors` before releasing these changes (the same prerequisite as JavaScript SDK PR #724).
+
 ## Fallback provider
 
 `FlagsFallbackProvider` is a reliability feature for startup fallback and outage recovery.
@@ -407,6 +433,8 @@ By default, the SDK also attempts to flush on shutdown:
 
 - `AddReflag(...)` flushes during hosted-service shutdown
 - `DisposeAsync()` tries to flush before tearing down the client
+
+The SDK does not intercept termination signals or terminate the process. Applications own shutdown; drain in-flight work and await `FlushAsync()` in custom shutdown hooks when not using the host lifecycle.
 
 This behavior is controlled by `Batch.FlushOnExit`:
 

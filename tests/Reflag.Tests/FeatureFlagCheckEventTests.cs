@@ -7,6 +7,8 @@ namespace Reflag.Tests;
 
 public sealed class FeatureFlagCheckEventTests
 {
+    private static readonly JsonSerializerOptions BootstrapJsonOptions = new(JsonSerializerDefaults.Web);
+
     [Fact]
     public async Task GetFlag_followed_by_FlushAsync_sends_feature_flag_event_with_evaluation_metadata()
     {
@@ -79,6 +81,7 @@ public sealed class FeatureFlagCheckEventTests
         Assert.True(eventItem.GetProperty("evalResult").GetBoolean());
         Assert.Equal(new[] { true }, eventItem.GetProperty("evalRuleResults").EnumerateArray().Select(item => item.GetBoolean()).ToArray());
         Assert.Empty(eventItem.GetProperty("evalMissingFields").EnumerateArray());
+        Assert.False(eventItem.TryGetProperty("evalErrors", out _));
         Assert.Equal("user-123", eventItem.GetProperty("evalContext").GetProperty("user").GetProperty("id").GetString());
         Assert.Equal("Ada", eventItem.GetProperty("evalContext").GetProperty("user").GetProperty("name").GetString());
         Assert.Equal("enterprise", eventItem.GetProperty("evalContext").GetProperty("user").GetProperty("plan").GetString());
@@ -253,11 +256,72 @@ public sealed class FeatureFlagCheckEventTests
         Assert.False(client.GetFlag("requires-plan", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
         Assert.False(client.GetFlag("requires-plan", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
 
+        Assert.False(client.GetFlag("requires-plan", new ReflagContext
+        {
+            User = new ReflagUserContext { Id = "different-user" },
+        }, new ReflagTelemetryOptions { EnableTelemetry = false }));
+
         var warningEntries = logger.Entries
-            .Where(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules might not be correctly evaluated due to missing context fields."))
+            .Where(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules might not be correctly evaluated."))
             .ToList();
 
         Assert.Single(warningEntries);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Diagnostics_are_in_checks_and_bootstrap_and_warnings_are_rate_limited(bool array)
+    {
+        var transport = new TestTransport();
+        transport.EnqueueGetJson(JsonSerializer.Serialize(new FeaturesEnvelope
+        {
+            Success = true,
+            Features = [TestDefinitions.CreateFlag("flag", 1, new FlagContextFilterDefinition
+            {
+                Field = "other.value", Operator = FlagContextFilterOperator.Gt, Values = ["1"],
+            })],
+        }, ReflagJson.Options));
+        var logger = new TestLogger();
+        await using var client = new ReflagClient(new ReflagClientOptions
+        {
+            SecretKey = "validSecretKeyWithMoreThan22Chars",
+            HttpClient = transport.CreateHttpClient(),
+            FlagsSyncMode = ReflagFlagsSyncMode.Polling,
+            Logger = logger,
+            FlagsFetchRetries = 0,
+        });
+        await client.InitializeAsync();
+        var context = new ReflagContext
+        {
+            Other = array ? new Dictionary<string, object?> { ["value"] = new[] { 2, 3 } } : null,
+        };
+        Assert.False(client.GetFlag("flag", context));
+        Assert.False(client.GetFlag("flag", context));
+        var bootstrap = client.GetFlagsForBootstrap(context);
+        var error = Assert.Single(bootstrap.Flags["flag"].Errors!);
+        Assert.Equal(array ? "UNSUPPORTED_ARRAY_OPERATOR" : "MISSING_CONTEXT_FIELD", error.Code);
+        using var bootstrapJson = JsonDocument.Parse(JsonSerializer.Serialize(bootstrap, BootstrapJsonOptions));
+        var bootstrapFlag = bootstrapJson.RootElement.GetProperty("flags").GetProperty("flag");
+        Assert.Equal(error.Code, Assert.Single(bootstrapFlag.GetProperty("evaluationErrors").EnumerateArray()).GetProperty("code").GetString());
+        Assert.False(bootstrapFlag.TryGetProperty("errors", out _));
+        await client.FlushAsync();
+        var item = ToJsonArray(Assert.Single(transport.PostCalls).Body).Single(entry => entry.GetProperty("type").GetString() == "feature-flag-event");
+        var wireError = Assert.Single(item.GetProperty("evalErrors").EnumerateArray());
+        Assert.Equal(error.Code, wireError.GetProperty("code").GetString());
+        Assert.Equal("other.value", wireError.GetProperty("field").GetString());
+        Assert.Equal(error.Message, wireError.GetProperty("message").GetString());
+        if (array)
+        {
+            Assert.Equal("GT", wireError.GetProperty("operator").GetString());
+            Assert.Empty(item.GetProperty("evalMissingFields").EnumerateArray());
+        }
+        else
+        {
+            Assert.False(wireError.TryGetProperty("operator", out _));
+            Assert.Equal("other.value", Assert.Single(item.GetProperty("evalMissingFields").EnumerateArray()).GetString());
+        }
+        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules"));
     }
 
     private static List<JsonElement> ToJsonArray(string body)
