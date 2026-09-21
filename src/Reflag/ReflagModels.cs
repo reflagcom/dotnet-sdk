@@ -148,7 +148,7 @@ public sealed class ReflagEvaluationError
     public string Message { get; init; } = string.Empty;
 }
 
-/// <summary>A complete local flag override, including an optional remote config variant.</summary>
+/// <summary>Overrides flag access and config.</summary>
 public sealed class ReflagFlagOverride
 {
     public bool IsEnabled { get; init; }
@@ -177,7 +177,7 @@ public sealed class RawReflagFlag
     public IReadOnlyList<ReflagEvaluationError>? Errors { get; init; }
 }
 
-/// <summary>The selected remote config variant, evaluated independently of flag access.</summary>
+/// <summary>A config variant and its JSON payload.</summary>
 public class ReflagFlagConfig
 {
     /// <summary>The variant key, or null if no variant matched.</summary>
@@ -185,13 +185,13 @@ public class ReflagFlagConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Key { get; init; }
 
-    /// <summary>The optional JSON payload. Its kind is Undefined when no payload was supplied.</summary>
+    /// <summary>The JSON payload, or Undefined when omitted.</summary>
     [JsonPropertyName("payload")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public JsonElement Payload { get; init; }
 }
 
-/// <summary>The selected remote config variant with a deserialized payload.</summary>
+/// <summary>A config variant with a typed payload.</summary>
 public sealed class ReflagFlagConfig<TPayload>
 {
     /// <summary>The variant key, or null if no variant matched.</summary>
@@ -199,12 +199,12 @@ public sealed class ReflagFlagConfig<TPayload>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Key { get; init; }
 
-    /// <summary>The deserialized payload, or default(TPayload) when no payload was supplied.</summary>
+    /// <summary>The payload, or default(TPayload) when omitted.</summary>
     [JsonPropertyName("payload")]
     public TPayload? Payload { get; init; }
 }
 
-/// <summary>A remote config evaluation including metadata for client bootstrapping.</summary>
+/// <summary>Config and evaluation details for bootstrapping.</summary>
 public sealed class RawReflagFlagConfig : ReflagFlagConfig
 {
     [JsonPropertyName("targetingVersion")]
@@ -258,7 +258,7 @@ public sealed class FlagDefinition
     public FlagConfigDefinition? Config { get; init; }
 }
 
-/// <summary>Ordered remote config variants and their independent targeting version.</summary>
+/// <summary>Config variants in matching order.</summary>
 public sealed class FlagConfigDefinition
 {
     [JsonPropertyName("version")]

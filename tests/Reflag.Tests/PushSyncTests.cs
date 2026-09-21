@@ -481,7 +481,7 @@ public sealed class PushSyncTests
 
         allowUpdate.TrySetResult(null);
         await WaitUntilAsync(() => waitForVersionSeen.Task.IsCompleted, TimeSpan.FromSeconds(5));
-        // Receipt of the request does not mean its response has reached the cache yet.
+        // Wait for the cache update, not just the request.
         await WaitUntilAsync(
             () => client.GetFlag("f1", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }),
             TimeSpan.FromSeconds(5));

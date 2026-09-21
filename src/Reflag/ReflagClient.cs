@@ -171,57 +171,19 @@ public sealed class ReflagClient : IAsyncDisposable
         ReflagContext context,
         ReflagTelemetryOptions? telemetryOptions = null)
     {
-        EnsureNotDisposed();
-        ThrowHelpers.ThrowIfNullOrWhitespace(key, nameof(key));
-        var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(context);
-        var normalizedTelemetry = NormalizeTelemetryOptions(telemetryOptions);
-
-        if (!_initializationFinished)
-        {
-            _logger.LogError("flag access: ReflagClient is not initialized yet.");
-        }
-
-        _ = SyncContextAsync(normalizedContext, normalizedTelemetry);
-        var definitions = GetDefinitionsForLocalEvaluation();
-        var rawFlag = EvaluateFlag(key, normalizedContext, definitions);
-
-        WarnFlagEvaluationDiagnostics(rawFlag.Key, rawFlag.Errors);
-        TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag);
-        return rawFlag.Value;
+        return CheckFlag(key, context, telemetryOptions, configCheck: false).Value;
     }
 
-    /// <summary>
-    /// Gets the first matching remote config variant and records a config check.
-    /// The result has a null key when no config is available or no variant matches.
-    /// Config is evaluated independently of <see cref="GetFlag" />.
-    /// </summary>
+    /// <summary>Gets the matching config, even when the flag is disabled. Records a config check.</summary>
     public ReflagFlagConfig GetFlagConfig(
         string key,
         ReflagContext context,
         ReflagTelemetryOptions? telemetryOptions = null)
     {
-        EnsureNotDisposed();
-        ThrowHelpers.ThrowIfNullOrWhitespace(key, nameof(key));
-        var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(context);
-        var normalizedTelemetry = NormalizeTelemetryOptions(telemetryOptions);
-
-        if (!_initializationFinished)
-        {
-            _logger.LogError("flag access: ReflagClient is not initialized yet.");
-        }
-
-        _ = SyncContextAsync(normalizedContext, normalizedTelemetry);
-        var rawFlag = EvaluateFlag(key, normalizedContext, GetDefinitionsForLocalEvaluation());
-        WarnFlagEvaluationDiagnostics(rawFlag.Key + ".config", rawFlag.Config?.Errors);
-        TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag, configCheck: true);
-        return SimplifyConfig(rawFlag.Config);
+        return SimplifyConfig(CheckFlag(key, context, telemetryOptions, configCheck: true).Config);
     }
 
-    /// <summary>
-    /// Gets the selected config and deserializes its payload using System.Text.Json web defaults,
-    /// or the supplied serializer options. An omitted payload returns default(TPayload).
-    /// Records the same config check as the raw overload, including when deserialization fails.
-    /// </summary>
+    /// <summary>Gets the config and deserializes its payload. Uses System.Text.Json web defaults.</summary>
     /// <exception cref="JsonException">The payload is incompatible with TPayload.</exception>
     /// <exception cref="NotSupportedException">No converter supports TPayload.</exception>
     public ReflagFlagConfig<TPayload> GetFlagConfig<TPayload>(
@@ -668,39 +630,45 @@ public sealed class ReflagClient : IAsyncDisposable
         return definitions;
     }
 
+    private RawReflagFlag CheckFlag(
+        string key,
+        ReflagContext context,
+        ReflagTelemetryOptions? telemetryOptions,
+        bool configCheck)
+    {
+        EnsureNotDisposed();
+        ThrowHelpers.ThrowIfNullOrWhitespace(key, nameof(key));
+        context = ReflagContextNormalizer.NormalizeTypedContext(context);
+        telemetryOptions = NormalizeTelemetryOptions(telemetryOptions);
+
+        if (!_initializationFinished)
+        {
+            _logger.LogError("flag access: ReflagClient is not initialized yet.");
+        }
+
+        _ = SyncContextAsync(context, telemetryOptions);
+        var flag = EvaluateFlag(key, context, GetDefinitionsForLocalEvaluation());
+        WarnFlagEvaluationDiagnostics(
+            configCheck ? key + ".config" : key,
+            configCheck ? flag.Config?.Errors : flag.Errors);
+        TryQueueCheckEvent(context, telemetryOptions, flag, configCheck);
+        return flag;
+    }
+
     private RawReflagFlag EvaluateFlag(
         string key,
         ReflagContext context,
         IReadOnlyList<CompiledFlagDefinition> definitions)
     {
-        var evaluationObject = ReflagContextNormalizer.ToEvaluationObject(context);
+        if (GetFlagOverrides(context).TryGetValue(key, out var value))
+        {
+            return ToRawFlag(key, value);
+        }
+
         var definition = definitions.FirstOrDefault(item => string.Equals(item.Definition.Key, key, StringComparison.Ordinal));
-        RawReflagFlag evaluatedFlag;
-
-        if (definition is null)
-        {
-            evaluatedFlag = new RawReflagFlag
-            {
-                Key = key,
-                Value = false,
-            };
-        }
-        else
-        {
-            evaluatedFlag = EvaluateDefinition(definition, evaluationObject);
-        }
-
-        if (TryGetOverride(context, key, out var overriddenValue))
-        {
-            return new RawReflagFlag
-            {
-                Key = key,
-                Value = overriddenValue.IsEnabled,
-                Config = OverrideConfig(overriddenValue.Config),
-            };
-        }
-
-        return evaluatedFlag;
+        return definition is null
+            ? new RawReflagFlag { Key = key }
+            : EvaluateDefinition(definition, ReflagContextNormalizer.ToEvaluationObject(context));
     }
 
     private static RawReflagFlag EvaluateDefinition(
@@ -750,12 +718,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
         foreach (var (key, value) in GetFlagOverrides(context))
         {
-            result[key] = new RawReflagFlag
-            {
-                Key = key,
-                Value = value.IsEnabled,
-                Config = OverrideConfig(value.Config),
-            };
+            result[key] = ToRawFlag(key, value);
         }
 
         return result;
@@ -765,11 +728,6 @@ public sealed class ReflagClient : IAsyncDisposable
     {
         var overrides = _effectiveFlagOverrides(context);
         return overrides ?? EmptyFlagOverrides;
-    }
-
-    private bool TryGetOverride(ReflagContext context, string key, out ReflagFlagOverride value)
-    {
-        return GetFlagOverrides(context).TryGetValue(key, out value!);
     }
 
     private async Task<FlagsCacheRefreshResult?> FetchDefinitionsAsync(int? waitForVersion)
@@ -1259,18 +1217,15 @@ public sealed class ReflagClient : IAsyncDisposable
         {
             factory = NormalizeFlagOverrides(configFactory);
         }
-        else if (options.FlagOverridesWithConfig is { } configOverrides)
-        {
-            var snapshot = CollectionHelpers.ToDictionary(configOverrides, StringComparer.Ordinal);
-            factory = _ => snapshot;
-        }
         else if (options.FlagOverridesFactory is { } booleanFactory)
         {
             factory = context => ConvertBooleanOverrides(booleanFactory(context));
         }
         else
         {
-            var snapshot = ConvertBooleanOverrides(options.FlagOverrides);
+            var snapshot = options.FlagOverridesWithConfig is { } configOverrides
+                ? CollectionHelpers.ToDictionary(configOverrides, StringComparer.Ordinal)
+                : ConvertBooleanOverrides(options.FlagOverrides);
             factory = _ => snapshot;
         }
 
@@ -1297,10 +1252,15 @@ public sealed class ReflagClient : IAsyncDisposable
         return context => factory(context) ?? EmptyFlagOverrides;
     }
 
-    private static RawReflagFlagConfig? OverrideConfig(ReflagFlagConfig? config) => config is null ? null : new()
+    private static RawReflagFlag ToRawFlag(string key, ReflagFlagOverride value) => new()
     {
-        Key = config.Key,
-        Payload = config.Payload,
+        Key = key,
+        Value = value.IsEnabled,
+        Config = value.Config is null ? null : new RawReflagFlagConfig
+        {
+            Key = value.Config.Key,
+            Payload = value.Config.Payload,
+        },
     };
 
     private static IReadOnlyDictionary<string, object?> BuildUserAttributes(ReflagUserContext user)
@@ -1799,13 +1759,13 @@ public sealed class ReflagBoundClient
         return _rootClient.GetFlag(key, Context, TelemetryOptions);
     }
 
-    /// <summary>Gets the remote config variant for this client's bound context.</summary>
+    /// <summary>Gets the config for this context.</summary>
     public ReflagFlagConfig GetFlagConfig(string key)
     {
         return _rootClient.GetFlagConfig(key, Context, TelemetryOptions);
     }
 
-    /// <summary>Gets the config for the bound context and deserializes its payload.</summary>
+    /// <summary>Gets the config with a typed payload.</summary>
     public ReflagFlagConfig<TPayload> GetFlagConfig<TPayload>(string key, JsonSerializerOptions? serializerOptions = null)
     {
         return _rootClient.GetFlagConfig<TPayload>(key, Context, TelemetryOptions, serializerOptions);

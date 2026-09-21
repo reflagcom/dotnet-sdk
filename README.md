@@ -87,53 +87,6 @@ builder.Services.AddReflag(new ReflagClientOptions());
 `InitializeAsync()` fetches the current flag definitions from Reflag.
 After that, `GetFlag(...)`, `GetFlagConfig(...)`, and `GetFlagsForBootstrap(...)` evaluate flags locally against the in-memory cached definitions, so ordinary flag reads do not need a network round trip after initialization completes.
 
-## Remote config and multivariate flags
-
-[Remote config](https://docs.reflag.com/product-handbook/remote-config) lets a flag select a named variant and an optional JSON payload for each user or company. Configure the variants and targeting in Reflag, then read the selected value with `GetFlagConfig`:
-
-```csharp
-var config = client.GetFlagConfig("checkout-experiment", context);
-// Also available on a bound client:
-var boundConfig = client.BindClient(context).GetFlagConfig("checkout-experiment");
-
-if (config.Key == "treatment")
-{
-    // Show the treatment variant.
-}
-
-if (config.Payload.ValueKind == System.Text.Json.JsonValueKind.Object &&
-    config.Payload.TryGetProperty("buttonLabel", out var label))
-{
-    var buttonLabel = label.GetString();
-}
-```
-
-`Key` is `null` when the flag is unknown, has no remote config, or no variant matches. `Payload` is a `System.Text.Json.JsonElement` and supports any JSON value. Its `ValueKind` is `Undefined` when omitted and `Null` for an explicit JSON null.
-
-To deserialize the payload into your own class or record, use the generic overload:
-
-```csharp
-var config = client.GetFlagConfig<CheckoutConfig>("checkout-experiment", context);
-var boundConfig = client.BindClient(context).GetFlagConfig<CheckoutConfig>("checkout-experiment");
-
-if (config.Key == "treatment")
-{
-    var buttonLabel = config.Payload?.ButtonLabel;
-}
-
-public sealed record CheckoutConfig(string ButtonLabel);
-```
-
-The result is a `ReflagFlagConfig<TPayload>` with the selected `Key` and typed `Payload`. Deserialization uses `System.Text.Json` web defaults, including case-insensitive property matching, so JSON `buttonLabel` maps to `ButtonLabel`. Pass `serializerOptions: yourOptions` to customize serialization conventions or supply converters. Interfaces and abstract classes require an appropriate converter or polymorphic configuration.
-
-When no variant matches or its payload is omitted, `Payload` is `default(TPayload)` and the selected key, if any, is preserved. Use nullable value types such as `int?` to distinguish a missing payload from zero. Explicit JSON null follows the serializer's normal behavior: it becomes null for reference/nullable types and raises `JsonException` for non-nullable value types. Incompatible payloads raise `JsonException`; unsupported types raise `NotSupportedException`. The config check still records the original JSON payload, even if deserialization fails, and typed and raw reads share the same telemetry deduplication.
-
-Config targeting is independent of boolean access: a disabled flag can still return a config variant. Use `GetFlag(...)` as well when access should gate your feature. The SDK selects the first matching variant in the order supplied by the API, which encodes targeting priority and the default variant.
-
-Each `GetFlagConfig(...)` call records a `check-config` exposure with the variant key, payload, config version, and evaluation diagnostics. Identical checks are rate limited separately from boolean checks. `ReflagTelemetryOptions.EnableTelemetry = false` disables this tracking. Bootstrap reads return config values and diagnostics without recording exposure.
-
-Config definitions are refreshed with flag definitions and preserved by fallback snapshots. `GetFlagDefinitions()` exposes them through `FlagDefinition.Config`; `GetFlagsForBootstrap()` includes the selected value under each flag's `Config` property.
-
 The SDK keeps definitions fresh in the background using push sync by default. You can switch to polling mode instead.
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
 Check-event deduplication preserves context JSON types and array order while ignoring object-key order, including nested objects.
@@ -249,7 +202,28 @@ var bootstrapped = bound.GetFlagsForBootstrap();
 
 ## Remote config
 
-Not supported at the moment.
+[Remote config](https://docs.reflag.com/product-handbook/remote-config) selects a variant and optional JSON payload for a user or company. The first matching variant wins, in the order returned by Reflag:
+
+```csharp
+var config = client.GetFlagConfig<CheckoutConfig>("checkout-experiment", context);
+if (config.Key == "treatment")
+{
+    var label = config.Payload?.ButtonLabel;
+}
+
+public sealed record CheckoutConfig(string ButtonLabel);
+```
+
+Bound clients support the same call: `bound.GetFlagConfig<CheckoutConfig>("checkout-experiment")`. Omit the type argument to get the payload as a `JsonElement`.
+
+- `Key` is null when no variant matches or the flag has no config. Config can still match when the flag is disabled.
+- A missing payload returns `default(TPayload)` for typed reads, or `JsonValueKind.Undefined` for raw reads. Use `int?` if you need to distinguish a missing number from zero.
+- Typed reads use System.Text.Json web defaults, so `buttonLabel` maps to `ButtonLabel`. Pass `serializerOptions` for custom options or converters. Interfaces need a converter or polymorphic configuration.
+- Invalid payloads throw `JsonException`; unsupported types throw `NotSupportedException`. JSON null follows the serializer's usual rules.
+
+Reads record a `check-config` event with the original payload, even if deserialization fails. Typed and raw reads share rate limiting. Set `EnableTelemetry = false` to disable tracking.
+
+Config is included in flag refreshes, fallback snapshots, and bootstrap data. Bootstrap reads do not record config checks.
 
 ## Configuring
 
@@ -383,32 +357,24 @@ using (client.PushFlagOverrides(context => new Dictionary<string, bool>
 
 ### Remote config overrides
 
-Use `ReflagFlagOverride` to override access and config together, including in offline mode:
+Use `ReflagFlagOverride` to set access and config together, including in offline mode:
 
 ```csharp
-using System.Text.Json;
-
-await using var client = new ReflagClient(new ReflagClientOptions
+client.SetFlagOverrides(new Dictionary<string, ReflagFlagOverride>
 {
-    Offline = true,
-    FlagOverridesWithConfig = new Dictionary<string, ReflagFlagOverride>
+    ["checkout-experiment"] = new()
     {
-        ["checkout-experiment"] = new()
+        IsEnabled = true,
+        Config = new ReflagFlagConfig
         {
-            IsEnabled = true,
-            Config = new ReflagFlagConfig
-            {
-                Key = "treatment",
-                Payload = JsonSerializer.SerializeToElement(new { buttonLabel = "Try it" }),
-            },
+            Key = "treatment",
+            Payload = JsonSerializer.SerializeToElement(new { buttonLabel = "Try it" }),
         },
     },
 });
-await client.InitializeAsync();
-var config = client.GetFlagConfig("checkout-experiment", new ReflagContext());
 ```
 
-Choose one constructor override option. `SetFlagOverrides(...)` and `PushFlagOverrides(...)` also accept dictionaries or context-dependent factories of `ReflagFlagOverride`, using the same layering and disposal behavior as boolean overrides. Each override replaces the entire flag result; a boolean override clears remote config for that flag. Overrides have no targeting version or evaluation diagnostics.
+Constructor options and `PushFlagOverrides` accept these overrides too. Use one constructor override option. Overrides replace the whole flag; a boolean override clears its config.
 
 ### Additional ways to provide flag overrides
 

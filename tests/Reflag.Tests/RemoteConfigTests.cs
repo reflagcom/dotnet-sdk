@@ -8,7 +8,7 @@ namespace Reflag.Tests;
 
 public sealed class RemoteConfigTests
 {
-    // The wire shape used by the Node SDK: config has its own version and ordered variants.
+    // Config has its own version and ordered variants.
     private const string Definition = """
         {
           "key": "experiment",
@@ -391,7 +391,7 @@ public sealed class RemoteConfigTests
         var item = Assert.Single(Events(transport));
         Assert.Equal("check-config", item.GetProperty("action").GetString());
         Assert.Equal(42, item.GetProperty("targetingVersion").GetInt32());
-        // Fields absent from the DTO must still be sent in the original payload.
+        // Telemetry keeps fields that the DTO omits.
         Assert.True(item.GetProperty("evalResult").GetProperty("payload").GetProperty("nested").GetProperty("enabled").GetBoolean());
     }
 
@@ -465,7 +465,7 @@ public sealed class RemoteConfigTests
         Assert.Equal("custom", config.Payload!.Label);
         var bound = client.BindClient(context, disabled);
         Assert.Equal("custom", bound.GetFlagConfig<ITestPayload>("experiment", serializerOptions: options).Payload!.Label);
-        // Supplying strict options replaces the case-insensitive web defaults.
+        // Caller options replace the defaults.
         Assert.Null(bound.GetFlagConfig<TestPayload>("experiment", new JsonSerializerOptions()).Payload!.Label);
         Assert.Throws<NotSupportedException>(() => bound.GetFlagConfig<ITestPayload>("experiment"));
         await client.FlushAsync();
