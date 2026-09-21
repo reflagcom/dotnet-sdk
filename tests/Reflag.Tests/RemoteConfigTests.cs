@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Reflag.Internal;
 using Xunit;
@@ -368,6 +369,137 @@ public sealed class RemoteConfigTests
             FlagOverridesWithConfigFactory = _ => new Dictionary<string, ReflagFlagOverride>(),
             FlagOverridesWithConfig = new Dictionary<string, ReflagFlagOverride>(),
         }));
+    }
+
+    [Fact]
+    public async Task Typed_config_deserializes_records_and_preserves_raw_telemetry()
+    {
+        var transport = CreateTransport();
+        await using var client = CreateClient(transport);
+        await client.InitializeAsync();
+        var context = ReflagContext.From(new { Company = new { Id = "acme" } });
+
+        var config = client.GetFlagConfig<TestPayload>("experiment", context);
+        Assert.Equal("treatment", config.Key);
+        Assert.Equal("Try it", config.Payload!.Label);
+        Assert.Equal(new[] { 1, 2 }, config.Payload.Limits);
+        var boundConfig = client.BindClient(context).GetFlagConfig<TestPayload>("experiment");
+        Assert.Equal(config.Payload.Label, boundConfig.Payload!.Label);
+        client.GetFlagConfig("experiment", context);
+
+        await client.FlushAsync();
+        var item = Assert.Single(Events(transport));
+        Assert.Equal("check-config", item.GetProperty("action").GetString());
+        Assert.Equal(42, item.GetProperty("targetingVersion").GetInt32());
+        // Fields absent from the DTO must still be sent in the original payload.
+        Assert.True(item.GetProperty("evalResult").GetProperty("payload").GetProperty("nested").GetProperty("enabled").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("null")]
+    public async Task Typed_configs_handle_missing_and_null_payloads(string? payload)
+    {
+        var transport = CreateTransport(SingleVariant("true", payload));
+        await using var client = CreateClient(transport);
+        await client.InitializeAsync();
+        var context = new ReflagContext();
+        var config = client.GetFlagConfig<TestPayload>("experiment", context);
+        Assert.Equal("variant", config.Key);
+        Assert.Null(config.Payload);
+        Assert.Null(client.GetFlagConfig<int?>("experiment", context).Payload);
+        if (payload is null)
+        {
+            Assert.Equal(0, client.GetFlagConfig<int>("experiment", context).Payload);
+        }
+        else
+        {
+            Assert.Throws<JsonException>(() => client.GetFlagConfig<int>("experiment", context));
+        }
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{\"key\":\"experiment\"}")]
+    [InlineData("{\"key\":\"experiment\",\"config\":{\"version\":1,\"variants\":[]}}")]
+    public async Task Typed_configs_return_empty_results_when_no_config_is_selected(string definition)
+    {
+        var transport = CreateTransport(definition);
+        await using var client = CreateClient(transport);
+        await client.InitializeAsync();
+        var config = client.GetFlagConfig<TestPayload>("experiment", new ReflagContext());
+        Assert.Null(config.Key);
+        Assert.Null(config.Payload);
+    }
+
+    [Fact]
+    public async Task Typed_configs_support_scalars_collections_and_offline_overrides()
+    {
+        await using var client = new ReflagClient(new ReflagClientOptions { Offline = true });
+        await client.InitializeAsync();
+        client.SetFlagOverrides(new Dictionary<string, ReflagFlagOverride>
+        {
+            ["number"] = new() { Config = new ReflagFlagConfig { Key = "scalar", Payload = JsonSerializer.SerializeToElement(42) } },
+            ["array"] = new() { Config = new ReflagFlagConfig { Key = "list", Payload = JsonSerializer.SerializeToElement(new[] { "a", "b" }) } },
+        });
+        var bound = client.BindClient(new ReflagContext());
+        var number = bound.GetFlagConfig<int>("number");
+        Assert.Equal(42, number.Payload);
+        Assert.Equal(42, JsonSerializer.SerializeToElement(number).GetProperty("payload").GetInt32());
+        Assert.Equal(0, JsonSerializer.SerializeToElement(new ReflagFlagConfig<int> { Key = "zero", Payload = 0 }).GetProperty("payload").GetInt32());
+        Assert.Equal(new[] { "a", "b" }, bound.GetFlagConfig<string[]>("array").Payload);
+    }
+
+    [Fact]
+    public async Task Typed_configs_use_custom_options_and_inherit_bound_telemetry_settings()
+    {
+        var transport = CreateTransport(SingleVariant("true", "{\"label\":\"custom\",\"limits\":[3]}"));
+        await using var client = CreateClient(transport);
+        await client.InitializeAsync();
+        var context = ReflagContext.From(new { User = new { Id = "user" } });
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new InterfacePayloadConverter());
+        var disabled = new ReflagTelemetryOptions { EnableTelemetry = false };
+
+        var config = client.GetFlagConfig<ITestPayload>("experiment", context, disabled, options);
+        Assert.Equal("custom", config.Payload!.Label);
+        var bound = client.BindClient(context, disabled);
+        Assert.Equal("custom", bound.GetFlagConfig<ITestPayload>("experiment", serializerOptions: options).Payload!.Label);
+        // Supplying strict options replaces the case-insensitive web defaults.
+        Assert.Null(bound.GetFlagConfig<TestPayload>("experiment", new JsonSerializerOptions()).Payload!.Label);
+        Assert.Throws<NotSupportedException>(() => bound.GetFlagConfig<ITestPayload>("experiment"));
+        await client.FlushAsync();
+        Assert.Empty(transport.PostCalls);
+    }
+
+    [Fact]
+    public async Task Typed_configs_propagate_incompatible_payload_errors_and_record_original_check()
+    {
+        var transport = CreateTransport(SingleVariant("true", "{\"label\":123}"));
+        await using var client = CreateClient(transport);
+        await client.InitializeAsync();
+        Assert.Throws<JsonException>(() => client.GetFlagConfig<TestPayload>("experiment", new ReflagContext()));
+        await client.FlushAsync();
+        var item = Assert.Single(Events(transport));
+        Assert.Equal(123, item.GetProperty("evalResult").GetProperty("payload").GetProperty("label").GetInt32());
+    }
+
+    private interface ITestPayload
+    {
+        string Label { get; }
+    }
+
+    private sealed record TestPayload(string Label, int[] Limits) : ITestPayload;
+
+    private sealed class InterfacePayloadConverter : JsonConverter<ITestPayload>
+    {
+        private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
+
+        public override ITestPayload? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            JsonSerializer.Deserialize<TestPayload>(ref reader, Options);
+
+        public override void Write(Utf8JsonWriter writer, ITestPayload value, JsonSerializerOptions options) =>
+            throw new NotSupportedException();
     }
 
     private static ReflagFlagOverride Override(string key) => new()

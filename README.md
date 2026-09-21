@@ -108,7 +108,25 @@ if (config.Payload.ValueKind == System.Text.Json.JsonValueKind.Object &&
 }
 ```
 
-`Key` is `null` when the flag is unknown, has no remote config, or no variant matches. `Payload` is a `System.Text.Json.JsonElement` and supports any JSON value. Its `ValueKind` is `Undefined` when omitted and `Null` for an explicit JSON null. Use `Payload.Deserialize<T>()` (with `using System.Text.Json;`) to deserialize a payload into your own type.
+`Key` is `null` when the flag is unknown, has no remote config, or no variant matches. `Payload` is a `System.Text.Json.JsonElement` and supports any JSON value. Its `ValueKind` is `Undefined` when omitted and `Null` for an explicit JSON null.
+
+To deserialize the payload into your own class or record, use the generic overload:
+
+```csharp
+var config = client.GetFlagConfig<CheckoutConfig>("checkout-experiment", context);
+var boundConfig = client.BindClient(context).GetFlagConfig<CheckoutConfig>("checkout-experiment");
+
+if (config.Key == "treatment")
+{
+    var buttonLabel = config.Payload?.ButtonLabel;
+}
+
+public sealed record CheckoutConfig(string ButtonLabel);
+```
+
+The result is a `ReflagFlagConfig<TPayload>` with the selected `Key` and typed `Payload`. Deserialization uses `System.Text.Json` web defaults, including case-insensitive property matching, so JSON `buttonLabel` maps to `ButtonLabel`. Pass `serializerOptions: yourOptions` to customize serialization conventions or supply converters. Interfaces and abstract classes require an appropriate converter or polymorphic configuration.
+
+When no variant matches or its payload is omitted, `Payload` is `default(TPayload)` and the selected key, if any, is preserved. Use nullable value types such as `int?` to distinguish a missing payload from zero. Explicit JSON null follows the serializer's normal behavior: it becomes null for reference/nullable types and raises `JsonException` for non-nullable value types. Incompatible payloads raise `JsonException`; unsupported types raise `NotSupportedException`. The config check still records the original JSON payload, even if deserialization fails, and typed and raw reads share the same telemetry deduplication.
 
 Config targeting is independent of boolean access: a disabled flag can still return a config variant. Use `GetFlag(...)` as well when access should gate your feature. The SDK selects the first matching variant in the order supplied by the API, which encodes targeting priority and the default variant.
 

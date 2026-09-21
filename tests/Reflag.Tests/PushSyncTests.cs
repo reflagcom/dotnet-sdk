@@ -481,6 +481,10 @@ public sealed class PushSyncTests
 
         allowUpdate.TrySetResult(null);
         await WaitUntilAsync(() => waitForVersionSeen.Task.IsCompleted, TimeSpan.FromSeconds(5));
+        // Receipt of the request does not mean its response has reached the cache yet.
+        await WaitUntilAsync(
+            () => client.GetFlag("f1", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }),
+            TimeSpan.FromSeconds(5));
         Assert.True(client.GetFlag("f1", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("failed to parse SSE message"));
         Assert.DoesNotContain(server.Requests, request => request.Path == "/features" && request.Query.TryGetValue("waitForVersion", out var value) && value == "99");

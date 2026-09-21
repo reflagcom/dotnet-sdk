@@ -191,6 +191,19 @@ public class ReflagFlagConfig
     public JsonElement Payload { get; init; }
 }
 
+/// <summary>The selected remote config variant with a deserialized payload.</summary>
+public sealed class ReflagFlagConfig<TPayload>
+{
+    /// <summary>The variant key, or null if no variant matched.</summary>
+    [JsonPropertyName("key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Key { get; init; }
+
+    /// <summary>The deserialized payload, or default(TPayload) when no payload was supplied.</summary>
+    [JsonPropertyName("payload")]
+    public TPayload? Payload { get; init; }
+}
+
 /// <summary>A remote config evaluation including metadata for client bootstrapping.</summary>
 public sealed class RawReflagFlagConfig : ReflagFlagConfig
 {

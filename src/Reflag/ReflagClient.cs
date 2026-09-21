@@ -8,6 +8,8 @@ namespace Reflag;
 
 public sealed class ReflagClient : IAsyncDisposable
 {
+    private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly object _initializeGate = new();
     private readonly object _overridesGate = new();
     private readonly CancellationTokenSource _disposeCancellationTokenSource = new();
@@ -213,6 +215,29 @@ public sealed class ReflagClient : IAsyncDisposable
         WarnFlagEvaluationDiagnostics(rawFlag.Key + ".config", rawFlag.Config?.Errors);
         TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag, configCheck: true);
         return SimplifyConfig(rawFlag.Config);
+    }
+
+    /// <summary>
+    /// Gets the selected config and deserializes its payload using System.Text.Json web defaults,
+    /// or the supplied serializer options. An omitted payload returns default(TPayload).
+    /// Records the same config check as the raw overload, including when deserialization fails.
+    /// </summary>
+    /// <exception cref="JsonException">The payload is incompatible with TPayload.</exception>
+    /// <exception cref="NotSupportedException">No converter supports TPayload.</exception>
+    public ReflagFlagConfig<TPayload> GetFlagConfig<TPayload>(
+        string key,
+        ReflagContext context,
+        ReflagTelemetryOptions? telemetryOptions = null,
+        JsonSerializerOptions? serializerOptions = null)
+    {
+        var config = GetFlagConfig(key, context, telemetryOptions);
+        return new ReflagFlagConfig<TPayload>
+        {
+            Key = config.Key,
+            Payload = config.Payload.ValueKind == JsonValueKind.Undefined
+                ? default
+                : config.Payload.Deserialize<TPayload>(serializerOptions ?? PayloadJsonOptions),
+        };
     }
 
     public ReflagBootstrappedFlags GetFlagsForBootstrap(
@@ -1778,6 +1803,12 @@ public sealed class ReflagBoundClient
     public ReflagFlagConfig GetFlagConfig(string key)
     {
         return _rootClient.GetFlagConfig(key, Context, TelemetryOptions);
+    }
+
+    /// <summary>Gets the config for the bound context and deserializes its payload.</summary>
+    public ReflagFlagConfig<TPayload> GetFlagConfig<TPayload>(string key, JsonSerializerOptions? serializerOptions = null)
+    {
+        return _rootClient.GetFlagConfig<TPayload>(key, Context, TelemetryOptions, serializerOptions);
     }
 
     public ReflagBootstrappedFlags GetFlagsForBootstrap()
