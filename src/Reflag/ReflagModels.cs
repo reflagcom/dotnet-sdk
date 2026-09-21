@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Amazon.S3;
 using Azure.Storage.Blobs;
@@ -48,6 +49,11 @@ public sealed class ReflagClientOptions
     public IReadOnlyDictionary<string, bool>? FlagOverrides { get; init; }
 
     public Func<ReflagContext, IReadOnlyDictionary<string, bool>>? FlagOverridesFactory { get; init; }
+
+    /// <summary>Overrides both flag access and remote config. Use only one override option.</summary>
+    public IReadOnlyDictionary<string, ReflagFlagOverride>? FlagOverridesWithConfig { get; init; }
+
+    public Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>>? FlagOverridesWithConfigFactory { get; init; }
 
     public bool? Offline { get; init; }
 
@@ -142,17 +148,62 @@ public sealed class ReflagEvaluationError
     public string Message { get; init; } = string.Empty;
 }
 
+/// <summary>A complete local flag override, including an optional remote config variant.</summary>
+public sealed class ReflagFlagOverride
+{
+    public bool IsEnabled { get; init; }
+
+    public ReflagFlagConfig? Config { get; init; }
+}
+
 public sealed class RawReflagFlag
 {
     public string Key { get; init; } = string.Empty;
 
     public bool Value { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RawReflagFlagConfig? Config { get; init; }
+
     public int? TargetingVersion { get; init; }
 
     public IReadOnlyList<bool>? RuleEvaluationResults { get; init; }
 
     /// <summary>Legacy missing-field diagnostics. Prefer <see cref="Errors" />.</summary>
+    public IReadOnlyList<string>? MissingContextFields { get; init; }
+
+    [JsonPropertyName("evaluationErrors")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<ReflagEvaluationError>? Errors { get; init; }
+}
+
+/// <summary>The selected remote config variant, evaluated independently of flag access.</summary>
+public class ReflagFlagConfig
+{
+    /// <summary>The variant key, or null if no variant matched.</summary>
+    [JsonPropertyName("key")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Key { get; init; }
+
+    /// <summary>The optional JSON payload. Its kind is Undefined when no payload was supplied.</summary>
+    [JsonPropertyName("payload")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public JsonElement Payload { get; init; }
+}
+
+/// <summary>A remote config evaluation including metadata for client bootstrapping.</summary>
+public sealed class RawReflagFlagConfig : ReflagFlagConfig
+{
+    [JsonPropertyName("targetingVersion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? TargetingVersion { get; init; }
+
+    [JsonPropertyName("ruleEvaluationResults")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<bool>? RuleEvaluationResults { get; init; }
+
+    [JsonPropertyName("missingContextFields")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? MissingContextFields { get; init; }
 
     [JsonPropertyName("evaluationErrors")]
@@ -189,6 +240,32 @@ public sealed class FlagDefinition
     /// </summary>
     [JsonPropertyName("targeting")]
     public FlagTargetingDefinition Targeting { get; init; } = new();
+
+    [JsonPropertyName("config")]
+    public FlagConfigDefinition? Config { get; init; }
+}
+
+/// <summary>Ordered remote config variants and their independent targeting version.</summary>
+public sealed class FlagConfigDefinition
+{
+    [JsonPropertyName("version")]
+    public int Version { get; init; }
+
+    [JsonPropertyName("variants")]
+    public IReadOnlyList<FlagConfigVariantDefinition> Variants { get; init; } = Array.Empty<FlagConfigVariantDefinition>();
+}
+
+public sealed class FlagConfigVariantDefinition
+{
+    [JsonPropertyName("key")]
+    public string Key { get; init; } = string.Empty;
+
+    [JsonPropertyName("payload")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public JsonElement Payload { get; init; }
+
+    [JsonPropertyName("filter")]
+    public FlagFilterDefinition Filter { get; init; } = default!;
 }
 
 /// <summary>

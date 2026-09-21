@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -22,8 +21,8 @@ public sealed class ReflagClient : IAsyncDisposable
     private readonly RateLimiter _rateLimiter;
     private readonly bool _flushOnExit;
 
-    private Func<ReflagContext, IReadOnlyDictionary<string, bool>> _baseFlagOverrides = static _ => EmptyBooleanDictionary.Instance;
-    private Func<ReflagContext, IReadOnlyDictionary<string, bool>> _effectiveFlagOverrides = static _ => EmptyBooleanDictionary.Instance;
+    private Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> _baseFlagOverrides = static _ => EmptyFlagOverrides;
+    private Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> _effectiveFlagOverrides = static _ => EmptyFlagOverrides;
     private readonly List<FlagOverrideLayer> _flagOverrideLayers = new();
     private int _nextFlagOverrideLayerId;
     private volatile bool _initializationFinished;
@@ -101,7 +100,7 @@ public sealed class ReflagClient : IAsyncDisposable
             flagsPushUrl,
             options.FlagsFallbackProvider);
 
-        _baseFlagOverrides = BuildBaseFlagOverrides(envConfig.FlagOverrides, options.FlagOverrides, options.FlagOverridesFactory);
+        _baseFlagOverrides = BuildBaseFlagOverrides(envConfig.FlagOverrides, options);
         _effectiveFlagOverrides = _baseFlagOverrides;
 
         _rateLimiter = new RateLimiter(ReflagConstants.FlagEventRateLimiterWindow);
@@ -184,9 +183,36 @@ public sealed class ReflagClient : IAsyncDisposable
         var definitions = GetDefinitionsForLocalEvaluation();
         var rawFlag = EvaluateFlag(key, normalizedContext, definitions);
 
-        WarnFlagEvaluationDiagnostics(rawFlag);
+        WarnFlagEvaluationDiagnostics(rawFlag.Key, rawFlag.Errors);
         TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag);
         return rawFlag.Value;
+    }
+
+    /// <summary>
+    /// Gets the first matching remote config variant and records a config check.
+    /// The result has a null key when no config is available or no variant matches.
+    /// Config is evaluated independently of <see cref="GetFlag" />.
+    /// </summary>
+    public ReflagFlagConfig GetFlagConfig(
+        string key,
+        ReflagContext context,
+        ReflagTelemetryOptions? telemetryOptions = null)
+    {
+        EnsureNotDisposed();
+        ThrowHelpers.ThrowIfNullOrWhitespace(key, nameof(key));
+        var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(context);
+        var normalizedTelemetry = NormalizeTelemetryOptions(telemetryOptions);
+
+        if (!_initializationFinished)
+        {
+            _logger.LogError("flag access: ReflagClient is not initialized yet.");
+        }
+
+        _ = SyncContextAsync(normalizedContext, normalizedTelemetry);
+        var rawFlag = EvaluateFlag(key, normalizedContext, GetDefinitionsForLocalEvaluation());
+        WarnFlagEvaluationDiagnostics(rawFlag.Key + ".config", rawFlag.Config?.Errors);
+        TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag, configCheck: true);
+        return SimplifyConfig(rawFlag.Config);
     }
 
     public ReflagBootstrappedFlags GetFlagsForBootstrap(
@@ -351,24 +377,52 @@ public sealed class ReflagClient : IAsyncDisposable
     {
         EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overrides, nameof(overrides));
-        SetFlagOverridesCore(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
+        SetFlagOverridesCore(_ => ConvertBooleanOverrides(overrides));
     }
 
     public void SetFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
     {
         EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overridesFactory, nameof(overridesFactory));
-        SetFlagOverridesCore(overridesFactory);
+        SetFlagOverridesCore(context => ConvertBooleanOverrides(overridesFactory(context)));
     }
 
     public IDisposable PushFlagOverrides(IReadOnlyDictionary<string, bool> overrides)
     {
         EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overrides, nameof(overrides));
-        return PushFlagOverridesCore(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
+        return PushFlagOverridesCore(_ => ConvertBooleanOverrides(overrides));
     }
 
     public IDisposable PushFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
+    {
+        EnsureNotDisposed();
+        ThrowHelpers.ThrowIfNull(overridesFactory, nameof(overridesFactory));
+        return PushFlagOverridesCore(context => ConvertBooleanOverrides(overridesFactory(context)));
+    }
+
+    public void SetFlagOverrides(IReadOnlyDictionary<string, ReflagFlagOverride> overrides)
+    {
+        EnsureNotDisposed();
+        ThrowHelpers.ThrowIfNull(overrides, nameof(overrides));
+        SetFlagOverridesCore(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
+    }
+
+    public void SetFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> overridesFactory)
+    {
+        EnsureNotDisposed();
+        ThrowHelpers.ThrowIfNull(overridesFactory, nameof(overridesFactory));
+        SetFlagOverridesCore(overridesFactory);
+    }
+
+    public IDisposable PushFlagOverrides(IReadOnlyDictionary<string, ReflagFlagOverride> overrides)
+    {
+        EnsureNotDisposed();
+        ThrowHelpers.ThrowIfNull(overrides, nameof(overrides));
+        return PushFlagOverridesCore(_ => CollectionHelpers.ToDictionary(overrides, StringComparer.Ordinal));
+    }
+
+    public IDisposable PushFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> overridesFactory)
     {
         EnsureNotDisposed();
         ThrowHelpers.ThrowIfNull(overridesFactory, nameof(overridesFactory));
@@ -380,7 +434,7 @@ public sealed class ReflagClient : IAsyncDisposable
         EnsureNotDisposed();
         lock (_overridesGate)
         {
-            _baseFlagOverrides = static _ => EmptyBooleanDictionary.Instance;
+            _baseFlagOverrides = static _ => EmptyFlagOverrides;
             SyncFlagOverridesNoLock();
         }
     }
@@ -507,7 +561,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
     }
 
-    private void SetFlagOverridesCore(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
+    private void SetFlagOverridesCore(Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> overridesFactory)
     {
         lock (_overridesGate)
         {
@@ -516,7 +570,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
     }
 
-    private IDisposable PushFlagOverridesCore(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
+    private IDisposable PushFlagOverridesCore(Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> overridesFactory)
     {
         FlagOverrideLayer layer;
         lock (_overridesGate)
@@ -608,16 +662,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
         else
         {
-            var result = definition.Evaluator(evaluationObject, definition.Definition.Key);
-            evaluatedFlag = new RawReflagFlag
-            {
-                Key = definition.Definition.Key,
-                Value = result.Value,
-                TargetingVersion = definition.Definition.Targeting.Version,
-                RuleEvaluationResults = result.RuleEvaluationResults,
-                MissingContextFields = result.MissingContextFields,
-                Errors = result.Errors.Count > 0 ? result.Errors : null,
-            };
+            evaluatedFlag = EvaluateDefinition(definition, evaluationObject);
         }
 
         if (TryGetOverride(context, key, out var overriddenValue))
@@ -625,12 +670,46 @@ public sealed class ReflagClient : IAsyncDisposable
             return new RawReflagFlag
             {
                 Key = key,
-                Value = overriddenValue,
+                Value = overriddenValue.IsEnabled,
+                Config = OverrideConfig(overriddenValue.Config),
             };
         }
 
         return evaluatedFlag;
     }
+
+    private static RawReflagFlag EvaluateDefinition(
+        CompiledFlagDefinition definition,
+        IReadOnlyDictionary<string, object?> evaluationObject)
+    {
+        var key = definition.Definition.Key;
+        var result = definition.Evaluator(evaluationObject, key);
+        var configResult = definition.ConfigEvaluator?.Invoke(evaluationObject, key);
+        return new RawReflagFlag
+        {
+            Key = key,
+            Value = result.Value,
+            TargetingVersion = definition.Definition.Targeting.Version,
+            RuleEvaluationResults = result.RuleEvaluationResults,
+            MissingContextFields = result.MissingContextFields,
+            Errors = result.Errors.Count > 0 ? result.Errors : null,
+            Config = new RawReflagFlagConfig
+            {
+                Key = configResult?.Value?.Key,
+                Payload = configResult?.Value?.Payload ?? default,
+                TargetingVersion = definition.Definition.Config?.Version,
+                RuleEvaluationResults = configResult?.RuleEvaluationResults ?? Array.Empty<bool>(),
+                MissingContextFields = configResult?.MissingContextFields ?? Array.Empty<string>(),
+                Errors = configResult?.Errors is { Count: > 0 } ? configResult.Errors : null,
+            },
+        };
+    }
+
+    private static ReflagFlagConfig SimplifyConfig(RawReflagFlagConfig? config) => new()
+    {
+        Key = config?.Key,
+        Payload = config?.Payload ?? default,
+    };
 
     private IReadOnlyDictionary<string, RawReflagFlag> EvaluateFlagsForBootstrap(
         ReflagContext context,
@@ -641,16 +720,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
         foreach (var definition in definitions)
         {
-            var evaluation = definition.Evaluator(evaluationObject, definition.Definition.Key);
-            result[definition.Definition.Key] = new RawReflagFlag
-            {
-                Key = definition.Definition.Key,
-                Value = evaluation.Value,
-                TargetingVersion = definition.Definition.Targeting.Version,
-                RuleEvaluationResults = evaluation.RuleEvaluationResults,
-                MissingContextFields = evaluation.MissingContextFields,
-                Errors = evaluation.Errors.Count > 0 ? evaluation.Errors : null,
-            };
+            result[definition.Definition.Key] = EvaluateDefinition(definition, evaluationObject);
         }
 
         foreach (var (key, value) in GetFlagOverrides(context))
@@ -658,22 +728,23 @@ public sealed class ReflagClient : IAsyncDisposable
             result[key] = new RawReflagFlag
             {
                 Key = key,
-                Value = value,
+                Value = value.IsEnabled,
+                Config = OverrideConfig(value.Config),
             };
         }
 
         return result;
     }
 
-    private IReadOnlyDictionary<string, bool> GetFlagOverrides(ReflagContext context)
+    private IReadOnlyDictionary<string, ReflagFlagOverride> GetFlagOverrides(ReflagContext context)
     {
         var overrides = _effectiveFlagOverrides(context);
-        return overrides ?? EmptyBooleanDictionary.Instance;
+        return overrides ?? EmptyFlagOverrides;
     }
 
-    private bool TryGetOverride(ReflagContext context, string key, out bool value)
+    private bool TryGetOverride(ReflagContext context, string key, out ReflagFlagOverride value)
     {
-        return GetFlagOverrides(context).TryGetValue(key, out value);
+        return GetFlagOverrides(context).TryGetValue(key, out value!);
     }
 
     private async Task<FlagsCacheRefreshResult?> FetchDefinitionsAsync(int? waitForVersion)
@@ -875,6 +946,10 @@ public sealed class ReflagClient : IAsyncDisposable
             {
                 Definition = definition,
                 Evaluator = FlagEvaluation.NewEvaluator(evaluationRules),
+                ConfigEvaluator = definition.Config is null ? null : FlagEvaluation.NewEvaluator(
+                    definition.Config.Variants.Select(variant => new EvaluationRule<ReflagFlagConfig>(
+                        FlagEvaluation.CompileFilter(variant.Filter),
+                        new ReflagFlagConfig { Key = variant.Key, Payload = variant.Payload })).ToArray()),
             };
         }).ToArray();
     }
@@ -894,6 +969,22 @@ public sealed class ReflagClient : IAsyncDisposable
         {
             ThrowHelpers.ThrowIfNull(rule, nameof(definition.Targeting.Rules));
             ThrowHelpers.ThrowIfNull(rule.Filter, nameof(rule.Filter));
+        }
+
+        if (definition.Config is { } config)
+        {
+            if (config.Version < 0)
+            {
+                throw new ArgumentException("flag definition config.version must be greater than or equal to zero.", nameof(definition));
+            }
+
+            ThrowHelpers.ThrowIfNull(config.Variants, nameof(config.Variants));
+            foreach (var variant in config.Variants)
+            {
+                ThrowHelpers.ThrowIfNull(variant, nameof(config.Variants));
+                ThrowHelpers.ThrowIfNullOrWhitespace(variant.Key, nameof(variant.Key));
+                ThrowHelpers.ThrowIfNull(variant.Filter, nameof(variant.Filter));
+            }
         }
     }
 
@@ -950,9 +1041,9 @@ public sealed class ReflagClient : IAsyncDisposable
         }
     }
 
-    private void WarnFlagEvaluationDiagnostics(RawReflagFlag flag)
+    private void WarnFlagEvaluationDiagnostics(string key, IReadOnlyList<ReflagEvaluationError>? errors)
     {
-        if (flag.Errors is not { Count: > 0 })
+        if (errors is not { Count: > 0 })
         {
             return;
         }
@@ -960,8 +1051,8 @@ public sealed class ReflagClient : IAsyncDisposable
         var warningKey = HashObjectSerializer.HashObject(new Dictionary<string, object?>
         {
             ["type"] = "evaluation-warning",
-            ["flagKey"] = flag.Key,
-            ["errors"] = JsonSerializer.Serialize(flag.Errors
+            ["flagKey"] = key,
+            ["errors"] = JsonSerializer.Serialize(errors
                 .OrderBy(error => error.Code, StringComparer.Ordinal)
                 .ThenBy(error => error.Field, StringComparer.Ordinal)
                 .ThenBy(error => error.Operator, StringComparer.Ordinal)),
@@ -976,28 +1067,29 @@ public sealed class ReflagClient : IAsyncDisposable
             "flag targeting rules might not be correctly evaluated. {EvaluationErrors}",
             new Dictionary<string, IReadOnlyList<ReflagEvaluationError>>
             {
-                [flag.Key] = flag.Errors,
+                [key] = errors,
             });
     }
 
     private void TryQueueCheckEvent(
         ReflagContext context,
         ReflagTelemetryOptions? telemetryOptions,
-        RawReflagFlag flag)
+        RawReflagFlag flag,
+        bool configCheck = false)
     {
         if (telemetryOptions?.EnableTelemetry == false || _config.Offline)
         {
             return;
         }
 
-        _ = SendFlagCheckEventSafeAsync(context, flag);
+        _ = SendFlagCheckEventSafeAsync(context, flag, configCheck);
     }
 
-    private async Task SendFlagCheckEventSafeAsync(ReflagContext context, RawReflagFlag flag)
+    private async Task SendFlagCheckEventSafeAsync(ReflagContext context, RawReflagFlag flag, bool configCheck)
     {
         try
         {
-            await SendFlagCheckEventAsync(context, flag, CancellationToken.None).ConfigureAwait(false);
+            await SendFlagCheckEventAsync(context, flag, configCheck, CancellationToken.None).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_disposed)
         {
@@ -1012,16 +1104,20 @@ public sealed class ReflagClient : IAsyncDisposable
     private async Task SendFlagCheckEventAsync(
         ReflagContext context,
         RawReflagFlag flag,
+        bool configCheck,
         CancellationToken cancellationToken)
     {
         var evaluationContext = ReflagContextNormalizer.ToEvaluationObject(context);
+        var action = configCheck ? "check-config" : "check";
+        var targetingVersion = configCheck ? flag.Config?.TargetingVersion : flag.TargetingVersion;
+        object evalResult = configCheck ? SimplifyConfig(flag.Config) : flag.Value;
         var dedupeKey = HashObjectSerializer.HashObject(new Dictionary<string, object?>
         {
             ["type"] = "feature-flag-event",
-            ["action"] = "check",
+            ["action"] = action,
             ["key"] = flag.Key,
-            ["targetingVersion"] = flag.TargetingVersion,
-            ["evalResult"] = flag.Value,
+            ["targetingVersion"] = targetingVersion,
+            ["evalResult"] = configCheck ? JsonSerializer.Serialize(evalResult, ReflagJson.Options) : evalResult,
             ["contextKey"] = BuildContextKey(evaluationContext),
         });
 
@@ -1033,14 +1129,14 @@ public sealed class ReflagClient : IAsyncDisposable
         await _batchBuffer.AddAsync(
             new FeatureFlagEventBulkItem
             {
-                Action = "check",
+                Action = action,
                 Key = flag.Key,
-                TargetingVersion = flag.TargetingVersion,
-                EvalResult = flag.Value,
+                TargetingVersion = targetingVersion,
+                EvalResult = evalResult,
                 EvalContext = evaluationContext,
-                EvalRuleResults = flag.RuleEvaluationResults,
-                EvalMissingFields = flag.MissingContextFields,
-                EvalErrors = flag.Errors,
+                EvalRuleResults = configCheck ? flag.Config?.RuleEvaluationResults : flag.RuleEvaluationResults,
+                EvalMissingFields = configCheck ? flag.Config?.MissingContextFields : flag.MissingContextFields,
+                EvalErrors = configCheck ? flag.Config?.Errors : flag.Errors,
             },
             cancellationToken).ConfigureAwait(false);
     }
@@ -1058,7 +1154,7 @@ public sealed class ReflagClient : IAsyncDisposable
             var merged = CollectionHelpers.ToDictionary(_baseFlagOverrides(context), StringComparer.Ordinal);
             foreach (var layer in layers)
             {
-                foreach (var (key, value) in layer(context) ?? EmptyBooleanDictionary.Instance)
+                foreach (var (key, value) in layer(context) ?? EmptyFlagOverrides)
                 {
                     merged[key] = value;
                 }
@@ -1119,59 +1215,68 @@ public sealed class ReflagClient : IAsyncDisposable
         };
     }
 
-    private static Func<ReflagContext, IReadOnlyDictionary<string, bool>> BuildBaseFlagOverrides(
+    private static readonly IReadOnlyDictionary<string, ReflagFlagOverride> EmptyFlagOverrides =
+        new Dictionary<string, ReflagFlagOverride>();
+
+    private static IReadOnlyDictionary<string, ReflagFlagOverride> ConvertBooleanOverrides(IReadOnlyDictionary<string, bool>? overrides)
+    {
+        return overrides?.ToDictionary(pair => pair.Key, pair => new ReflagFlagOverride { IsEnabled = pair.Value }, StringComparer.Ordinal)
+            ?? EmptyFlagOverrides;
+    }
+
+    private static Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> BuildBaseFlagOverrides(
         IReadOnlyDictionary<string, bool> envOverrides,
-        IReadOnlyDictionary<string, bool>? optionOverrides,
-        Func<ReflagContext, IReadOnlyDictionary<string, bool>>? optionOverridesFactory)
+        ReflagClientOptions options)
     {
-        if (optionOverridesFactory is not null)
+        var environment = ConvertBooleanOverrides(envOverrides);
+        Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> factory;
+        if (options.FlagOverridesWithConfigFactory is { } configFactory)
         {
-            var normalizedFactory = NormalizeFlagOverrides(optionOverridesFactory);
-            return context => MergeOverrides(envOverrides, normalizedFactory(context));
+            factory = NormalizeFlagOverrides(configFactory);
+        }
+        else if (options.FlagOverridesWithConfig is { } configOverrides)
+        {
+            var snapshot = CollectionHelpers.ToDictionary(configOverrides, StringComparer.Ordinal);
+            factory = _ => snapshot;
+        }
+        else if (options.FlagOverridesFactory is { } booleanFactory)
+        {
+            factory = context => ConvertBooleanOverrides(booleanFactory(context));
+        }
+        else
+        {
+            var snapshot = ConvertBooleanOverrides(options.FlagOverrides);
+            factory = _ => snapshot;
         }
 
-        if (optionOverrides is not null)
+        if (environment.Count == 0)
         {
-            var normalizedOverrides = CollectionHelpers.ToDictionary(optionOverrides, StringComparer.Ordinal);
-            return _ => MergeOverrides(envOverrides, normalizedOverrides);
+            return factory;
         }
 
-        if (envOverrides.Count == 0)
+        return context =>
         {
-            return static _ => EmptyBooleanDictionary.Instance;
-        }
+            var merged = CollectionHelpers.ToDictionary(environment, StringComparer.Ordinal);
+            foreach (var (key, value) in factory(context))
+            {
+                merged[key] = value;
+            }
 
-        return _ => envOverrides;
+            return merged;
+        };
     }
 
-    private static Func<ReflagContext, IReadOnlyDictionary<string, bool>> NormalizeFlagOverrides(
-        Func<ReflagContext, IReadOnlyDictionary<string, bool>> factory)
+    private static Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> NormalizeFlagOverrides(
+        Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> factory)
     {
-        return context => factory(context) ?? EmptyBooleanDictionary.Instance;
+        return context => factory(context) ?? EmptyFlagOverrides;
     }
 
-    private static IReadOnlyDictionary<string, bool> MergeOverrides(
-        IReadOnlyDictionary<string, bool> lowerPriority,
-        IReadOnlyDictionary<string, bool> higherPriority)
+    private static RawReflagFlagConfig? OverrideConfig(ReflagFlagConfig? config) => config is null ? null : new()
     {
-        if (lowerPriority.Count == 0)
-        {
-            return CollectionHelpers.ToDictionary(higherPriority, StringComparer.Ordinal);
-        }
-
-        if (higherPriority.Count == 0)
-        {
-            return CollectionHelpers.ToDictionary(lowerPriority, StringComparer.Ordinal);
-        }
-
-        var merged = CollectionHelpers.ToDictionary(lowerPriority, StringComparer.Ordinal);
-        foreach (var (key, value) in higherPriority)
-        {
-            merged[key] = value;
-        }
-
-        return merged;
-    }
+        Key = config.Key,
+        Payload = config.Payload,
+    };
 
     private static IReadOnlyDictionary<string, object?> BuildUserAttributes(ReflagUserContext user)
     {
@@ -1217,9 +1322,9 @@ public sealed class ReflagClient : IAsyncDisposable
             throw new ArgumentException("options.FlagsPushUrl must be an absolute URI.", nameof(options));
         }
 
-        if (options.FlagOverrides is not null && options.FlagOverridesFactory is not null)
+        if (new object?[] { options.FlagOverrides, options.FlagOverridesFactory, options.FlagOverridesWithConfig, options.FlagOverridesWithConfigFactory }.Count(value => value is not null) > 1)
         {
-            throw new ArgumentException("Specify either FlagOverrides or FlagOverridesFactory, but not both.", nameof(options));
+            throw new ArgumentException("Specify only one of FlagOverrides, FlagOverridesFactory, FlagOverridesWithConfig, or FlagOverridesWithConfigFactory.", nameof(options));
         }
     }
 
@@ -1401,7 +1506,7 @@ public sealed class ReflagClient : IAsyncDisposable
         public int? TargetingVersion { get; init; }
 
         [JsonPropertyName("evalResult")]
-        public bool EvalResult { get; init; }
+        public object EvalResult { get; init; } = false;
 
         [JsonPropertyName("evalContext")]
         public IReadOnlyDictionary<string, object?>? EvalContext { get; init; }
@@ -1417,7 +1522,7 @@ public sealed class ReflagClient : IAsyncDisposable
         public IReadOnlyList<ReflagEvaluationError>? EvalErrors { get; init; }
     }
 
-    private readonly record struct FlagOverrideLayer(int Id, Func<ReflagContext, IReadOnlyDictionary<string, bool>> Factory);
+    private readonly record struct FlagOverrideLayer(int Id, Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>> Factory);
 
     private sealed class FlagOverrideScope(ReflagClient client, int layerId) : IDisposable
     {
@@ -1638,37 +1743,6 @@ public sealed class ReflagClient : IAsyncDisposable
             }
         }
     }
-
-    private sealed class EmptyBooleanDictionary : IReadOnlyDictionary<string, bool>
-    {
-        public static readonly EmptyBooleanDictionary Instance = new();
-
-        public int Count => 0;
-
-        public IEnumerable<string> Keys => Array.Empty<string>();
-
-        public IEnumerable<bool> Values => Array.Empty<bool>();
-
-        public bool this[string key] => throw new KeyNotFoundException();
-
-        public bool ContainsKey(string key) => false;
-
-        public IEnumerator<KeyValuePair<string, bool>> GetEnumerator()
-        {
-            return Enumerable.Empty<KeyValuePair<string, bool>>().GetEnumerator();
-        }
-
-        public bool TryGetValue(string key, out bool value)
-        {
-            value = default;
-            return false;
-        }
-
-        IEnumerator IEnumerable.GetEnumerator()
-        {
-            return GetEnumerator();
-        }
-    }
 }
 
 public sealed class ReflagBoundClient
@@ -1698,6 +1772,12 @@ public sealed class ReflagBoundClient
     public bool GetFlag(string key)
     {
         return _rootClient.GetFlag(key, Context, TelemetryOptions);
+    }
+
+    /// <summary>Gets the remote config variant for this client's bound context.</summary>
+    public ReflagFlagConfig GetFlagConfig(string key)
+    {
+        return _rootClient.GetFlagConfig(key, Context, TelemetryOptions);
     }
 
     public ReflagBootstrappedFlags GetFlagsForBootstrap()

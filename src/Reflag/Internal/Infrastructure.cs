@@ -167,6 +167,9 @@ internal sealed class FlagDefinitionJsonConverter : JsonConverter<FlagDefinition
             Key = key,
             Description = description,
             Targeting = targeting ?? new FlagTargetingDefinition(),
+            Config = root.TryGetProperty("config", out var configElement) && configElement.ValueKind != JsonValueKind.Null
+                ? JsonSerializer.Deserialize<FlagConfigDefinition>(configElement.GetRawText(), options)
+                : null,
         };
     }
 
@@ -182,6 +185,11 @@ internal sealed class FlagDefinitionJsonConverter : JsonConverter<FlagDefinition
 
         writer.WritePropertyName("targeting");
         JsonSerializer.Serialize(writer, value.Targeting, options);
+        if (value.Config is not null)
+        {
+            writer.WritePropertyName("config");
+            JsonSerializer.Serialize(writer, value.Config, options);
+        }
         writer.WriteEndObject();
     }
 }

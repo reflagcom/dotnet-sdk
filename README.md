@@ -85,7 +85,36 @@ builder.Services.AddReflag(new ReflagClientOptions());
 ## High performance flag targeting
 
 `InitializeAsync()` fetches the current flag definitions from Reflag.
-After that, `GetFlag(...)` and `GetFlagsForBootstrap(...)` evaluate flags locally against the in-memory cached definitions, so ordinary flag reads do not need a network round trip after initialization completes.
+After that, `GetFlag(...)`, `GetFlagConfig(...)`, and `GetFlagsForBootstrap(...)` evaluate flags locally against the in-memory cached definitions, so ordinary flag reads do not need a network round trip after initialization completes.
+
+## Remote config and multivariate flags
+
+[Remote config](https://docs.reflag.com/product-handbook/remote-config) lets a flag select a named variant and an optional JSON payload for each user or company. Configure the variants and targeting in Reflag, then read the selected value with `GetFlagConfig`:
+
+```csharp
+var config = client.GetFlagConfig("checkout-experiment", context);
+// Also available on a bound client:
+var boundConfig = client.BindClient(context).GetFlagConfig("checkout-experiment");
+
+if (config.Key == "treatment")
+{
+    // Show the treatment variant.
+}
+
+if (config.Payload.ValueKind == System.Text.Json.JsonValueKind.Object &&
+    config.Payload.TryGetProperty("buttonLabel", out var label))
+{
+    var buttonLabel = label.GetString();
+}
+```
+
+`Key` is `null` when the flag is unknown, has no remote config, or no variant matches. `Payload` is a `System.Text.Json.JsonElement` and supports any JSON value. Its `ValueKind` is `Undefined` when omitted and `Null` for an explicit JSON null. Use `Payload.Deserialize<T>()` (with `using System.Text.Json;`) to deserialize a payload into your own type.
+
+Config targeting is independent of boolean access: a disabled flag can still return a config variant. Use `GetFlag(...)` as well when access should gate your feature. The SDK selects the first matching variant in the order supplied by the API, which encodes targeting priority and the default variant.
+
+Each `GetFlagConfig(...)` call records a `check-config` exposure with the variant key, payload, config version, and evaluation diagnostics. Identical checks are rate limited separately from boolean checks. `ReflagTelemetryOptions.EnableTelemetry = false` disables this tracking. Bootstrap reads return config values and diagnostics without recording exposure.
+
+Config definitions are refreshed with flag definitions and preserved by fallback snapshots. `GetFlagDefinitions()` exposes them through `FlagDefinition.Config`; `GetFlagsForBootstrap()` includes the selected value under each flag's `Config` property.
 
 The SDK keeps definitions fresh in the background using push sync by default. You can switch to polling mode instead.
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
@@ -246,6 +275,8 @@ Constructor options currently available:
 | `Batch` | `ReflagBatchOptions?` | Max size, interval, shutdown flush | - |
 | `FlagOverrides` | `IReadOnlyDictionary<string, bool>?` | Base local overrides | `REFLAG_FLAGS_ENABLED`, `REFLAG_FLAGS_DISABLED` |
 | `FlagOverridesFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, bool>>?` | Context-dependent base overrides | - |
+| `FlagOverridesWithConfig` | `IReadOnlyDictionary<string, ReflagFlagOverride>?` | Base overrides including remote config | - |
+| `FlagOverridesWithConfigFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, ReflagFlagOverride>>?` | Context-dependent overrides including remote config | - |
 | `Offline` | `bool?` | Disables network I/O | `REFLAG_OFFLINE` |
 | `FlagsSyncMode` | `ReflagFlagsSyncMode?` | Default is `Push` | - |
 | `FlagsPushUrl` | `Uri?` | Override the push-sync SSE endpoint (`/sse/server`) | - |
@@ -332,6 +363,35 @@ using (client.PushFlagOverrides(context => new Dictionary<string, bool>
 }
 ```
 
+### Remote config overrides
+
+Use `ReflagFlagOverride` to override access and config together, including in offline mode:
+
+```csharp
+using System.Text.Json;
+
+await using var client = new ReflagClient(new ReflagClientOptions
+{
+    Offline = true,
+    FlagOverridesWithConfig = new Dictionary<string, ReflagFlagOverride>
+    {
+        ["checkout-experiment"] = new()
+        {
+            IsEnabled = true,
+            Config = new ReflagFlagConfig
+            {
+                Key = "treatment",
+                Payload = JsonSerializer.SerializeToElement(new { buttonLabel = "Try it" }),
+            },
+        },
+    },
+});
+await client.InitializeAsync();
+var config = client.GetFlagConfig("checkout-experiment", new ReflagContext());
+```
+
+Choose one constructor override option. `SetFlagOverrides(...)` and `PushFlagOverrides(...)` also accept dictionaries or context-dependent factories of `ReflagFlagOverride`, using the same layering and disposal behavior as boolean overrides. Each override replaces the entire flag result; a boolean override clears remote config for that flag. Overrides have no targeting version or evaluation diagnostics.
+
 ### Additional ways to provide flag overrides
 
 You can also provide overrides through environment variables:
@@ -402,7 +462,7 @@ var enabled = bound.GetFlag("new-dashboard");
 await bound.TrackAsync("opened-dashboard"); // no-op when telemetry is disabled
 ```
 
-You can also pass telemetry options directly to `GetFlag(...)` or `GetFlagsForBootstrap(...)`:
+You can also pass telemetry options directly to `GetFlag(...)`, `GetFlagConfig(...)`, or `GetFlagsForBootstrap(...)`:
 
 ```csharp
 var enabled = client.GetFlag(
