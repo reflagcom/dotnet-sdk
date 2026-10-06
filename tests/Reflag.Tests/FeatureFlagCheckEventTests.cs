@@ -124,6 +124,7 @@ public sealed class FeatureFlagCheckEventTests
         Assert.False(eventItem.TryGetProperty("targetingVersion", out _));
         Assert.False(eventItem.TryGetProperty("evalRuleResults", out _));
         Assert.False(eventItem.TryGetProperty("evalMissingFields", out _));
+        Assert.False(eventItem.TryGetProperty("evalErrors", out _));
     }
 
     [Fact]
@@ -262,7 +263,7 @@ public sealed class FeatureFlagCheckEventTests
         }, new ReflagTelemetryOptions { EnableTelemetry = false }));
 
         var warningEntries = logger.Entries
-            .Where(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules might not be correctly evaluated."))
+            .Where(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules could not be fully evaluated."))
             .ToList();
 
         Assert.Single(warningEntries);

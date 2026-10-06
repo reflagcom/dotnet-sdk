@@ -111,11 +111,19 @@ For array fields:
 
 Primitive elements are normalized to strings (null becomes `""`); composite elements are JSON-encoded. JSON-looking strings remain scalar strings. Scalar operator behavior is unchanged.
 
-Numeric, date, boolean, and percentage-rollout operators do not support arrays. Unsupported operations and required missing fields produce non-fatal diagnostics and **fail the entire affected rule closed**, even inside negations or otherwise-matching OR groups. Later rules can still match.
+Numeric, date, boolean, and percentage-rollout operators do not support arrays. Invalid conditions produce non-fatal diagnostics and **fail the entire affected rule closed**, even inside negations or otherwise-matching OR groups. Later rules can still match.
 
-Diagnostics are available as `RawReflagFlag.Errors` in bootstrap results, logged with rate limiting, and sent as `evalErrors` in flag-check telemetry. Bootstrap JSON uses `evaluationErrors` for compatibility with JavaScript clients. Legacy `MissingContextFields` / `evalMissingFields` remain available.
+Targeting diagnostics use the same codes as the Node SDK:
 
-**Release prerequisite:** the ingest service must support `evalErrors` before releasing these changes (the same prerequisite as JavaScript SDK PR #724).
+- `MISSING_CONTEXT_FIELD`: a required context field is absent.
+- `UNSUPPORTED_ARRAY_OPERATOR`: a scalar-only operator received an array.
+- `INVALID_CONTEXT_VALUE`: a numeric or date operator received an invalid context value.
+- `INVALID_TARGETING_VALUE`: a numeric or date comparison value (including a relative-date day offset) is invalid.
+- `UNKNOWN_OPERATOR`: the targeting operator is not recognized. Other rules and flags remain evaluable.
+
+Diagnostics are available as `RawReflagFlag.Errors` in bootstrap results, logged with rate limiting, and sent as `evalErrors` in flag-check telemetry. Messages do not include raw context or comparison values. Bootstrap JSON uses `evaluationErrors` for compatibility with JavaScript clients. Legacy `MissingContextFields` / `evalMissingFields` remain available.
+
+Online flag checks made before `InitializeAsync()` completes also include `CLIENT_NOT_INITIALIZED` in telemetry. This check-only diagnostic is not added to bootstrap results or offline evaluations. Always await `InitializeAsync()` before evaluating flags.
 
 ## Fallback provider
 

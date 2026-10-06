@@ -90,13 +90,20 @@ internal sealed class CompiledContextFilter(
     string field,
     FlagContextFilterOperator @operator,
     IReadOnlyList<string> values,
-    HashSet<string>? valueSet) : CompiledFilter
+    HashSet<string>? valueSet,
+    string? unknownOperator = null) : CompiledFilter
 {
     public override bool Evaluate(
         IReadOnlyDictionary<string, object?> context,
         EvaluationErrors missingContextFields,
         DateTimeOffset now)
     {
+        if (!FlagContextFilterOperatorJsonConverter.IsKnown(@operator))
+        {
+            missingContextFields.AddUnknownOperator(field, unknownOperator ?? FlagContextFilterOperatorJsonConverter.GetName(@operator));
+            return false;
+        }
+
         if (!context.TryGetValue(field, out var fieldValue))
         {
             if (@operator is FlagContextFilterOperator.Set or FlagContextFilterOperator.NotSet)
@@ -124,12 +131,12 @@ internal sealed class CompiledContextFilter(
                 case FlagContextFilterOperator.Set: return array.Length > 0;
                 case FlagContextFilterOperator.NotSet: return array.Length == 0;
                 default:
-                    missingContextFields.AddUnsupportedArray(field, JsonSerializer.Serialize(@operator, ReflagJson.Options).Trim('"'));
+                    missingContextFields.AddUnsupportedArray(field, FlagContextFilterOperatorJsonConverter.GetName(@operator));
                     return false;
             }
         }
 
-        return FlagEvaluation.Evaluate((string)fieldValue!, @operator, values, valueSet, now);
+        return FlagEvaluation.Evaluate((string)fieldValue!, @operator, values, valueSet, now, missingContextFields, field);
     }
 }
 
@@ -181,6 +188,30 @@ internal sealed class EvaluationErrors
         Message = @operator == "rolloutPercentage"
             ? $"Percentage rollout does not support array-valued context field \"{field}\"."
             : $"Operator {@operator} does not support array-valued context field \"{field}\".",
+    });
+
+    public void AddInvalidContextValue(string field, string @operator, string expected) => Add(new ReflagEvaluationError
+    {
+        Code = "INVALID_CONTEXT_VALUE",
+        Field = field,
+        Operator = @operator,
+        Message = $"Context field \"{field}\" must be {expected} for operator \"{@operator}\".",
+    });
+
+    public void AddInvalidTargetingValue(string field, string @operator, string expected) => Add(new ReflagEvaluationError
+    {
+        Code = "INVALID_TARGETING_VALUE",
+        Field = field,
+        Operator = @operator,
+        Message = $"Targeting value for operator \"{@operator}\" and context field \"{field}\" must be {expected}.",
+    });
+
+    public void AddUnknownOperator(string field, string @operator) => Add(new ReflagEvaluationError
+    {
+        Code = "UNKNOWN_OPERATOR",
+        Field = field,
+        Operator = @operator,
+        Message = $"Unknown targeting operator \"{@operator}\" for context field \"{field}\".",
     });
 
     public void Add(ReflagEvaluationError error)
@@ -266,7 +297,9 @@ internal static class FlagEvaluation
         FlagContextFilterOperator @operator,
         IReadOnlyList<string> values,
         HashSet<string>? valueSet,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        EvaluationErrors? errors = null,
+        string field = "")
     {
         var comparisonValue = values.Count > 0 ? values[0] : string.Empty;
 
@@ -278,12 +311,9 @@ internal static class FlagEvaluation
             FlagContextFilterOperator.NotAnyOf => !(valueSet?.Contains(fieldValue) ?? values.Contains(fieldValue)),
             FlagContextFilterOperator.Contains => ContainsIgnoreCase(fieldValue, comparisonValue),
             FlagContextFilterOperator.NotContains => !ContainsIgnoreCase(fieldValue, comparisonValue),
-            FlagContextFilterOperator.Gt => CompareNumbers(fieldValue, comparisonValue, greaterThan: true),
-            FlagContextFilterOperator.Lt => CompareNumbers(fieldValue, comparisonValue, greaterThan: false),
-            FlagContextFilterOperator.After => CompareRelativeDate(fieldValue, comparisonValue, now, after: true),
-            FlagContextFilterOperator.Before => CompareRelativeDate(fieldValue, comparisonValue, now, after: false),
-            FlagContextFilterOperator.DateAfter => CompareAbsoluteDate(fieldValue, comparisonValue, after: true),
-            FlagContextFilterOperator.DateBefore => CompareAbsoluteDate(fieldValue, comparisonValue, after: false),
+            FlagContextFilterOperator.Gt or FlagContextFilterOperator.Lt => CompareNumbers(fieldValue, comparisonValue, @operator, errors, field),
+            FlagContextFilterOperator.After or FlagContextFilterOperator.Before => CompareRelativeDate(fieldValue, comparisonValue, now, @operator, errors, field),
+            FlagContextFilterOperator.DateAfter or FlagContextFilterOperator.DateBefore => CompareAbsoluteDate(fieldValue, comparisonValue, @operator, errors, field),
             FlagContextFilterOperator.Set => fieldValue != string.Empty,
             FlagContextFilterOperator.NotSet => fieldValue == string.Empty,
             FlagContextFilterOperator.IsTrue => fieldValue == "true",
@@ -353,7 +383,8 @@ internal static class FlagEvaluation
                 contextFilter.Values,
                 contextFilter.Operator is FlagContextFilterOperator.AnyOf or FlagContextFilterOperator.NotAnyOf
                     ? new HashSet<string>(contextFilter.Values, StringComparer.Ordinal)
-                    : null),
+                    : null,
+                contextFilter.UnknownOperator),
             FlagPercentageRolloutFilterDefinition rolloutFilter => new CompiledRolloutPercentageFilter(
                 rolloutFilter.Key,
                 rolloutFilter.PartialRolloutAttribute,
@@ -376,51 +407,81 @@ internal static class FlagEvaluation
 #endif
     }
 
-    private static bool CompareNumbers(string fieldValue, string comparisonValue, bool greaterThan)
+    private static bool CompareNumbers(
+        string fieldValue, string comparisonValue, FlagContextFilterOperator @operator, EvaluationErrors? errors, string field)
     {
-        if (!double.TryParse(fieldValue, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var fieldNumber) ||
-            !double.TryParse(comparisonValue, NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var comparisonNumber) ||
-            double.IsNaN(fieldNumber) ||
-            double.IsNaN(comparisonNumber))
+        var contextValid = TryParseNumber(fieldValue, NumberStyles.Float | NumberStyles.AllowThousands, out var fieldNumber);
+        var targetingValid = TryParseNumber(comparisonValue, NumberStyles.Float | NumberStyles.AllowThousands, out var comparisonNumber);
+        if (!ValidateValues(contextValid, targetingValid, "numeric", "numeric", @operator, errors, field))
         {
             return false;
         }
 
-        return greaterThan ? fieldNumber > comparisonNumber : fieldNumber < comparisonNumber;
+        return @operator == FlagContextFilterOperator.Gt ? fieldNumber > comparisonNumber : fieldNumber < comparisonNumber;
     }
 
-    private static bool CompareRelativeDate(string fieldValue, string comparisonValue, DateTimeOffset now, bool after)
+    private static bool CompareRelativeDate(
+        string fieldValue, string comparisonValue, DateTimeOffset now, FlagContextFilterOperator @operator, EvaluationErrors? errors, string field)
     {
-        if (!double.TryParse(comparisonValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var days))
+        var contextValid = TryParseDate(fieldValue, out var fieldDate);
+        var targetingValid = TryParseNumber(comparisonValue, NumberStyles.Float, out var days);
+        var daysAgo = now;
+        if (targetingValid)
+        {
+            try
+            {
+                daysAgo = now.AddDays(-days);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                targetingValid = false;
+            }
+        }
+
+        if (!ValidateValues(contextValid, targetingValid, "a valid date", "a numeric day offset", @operator, errors, field))
         {
             return false;
         }
 
-        if (!DateTimeOffset.TryParse(fieldValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fieldDate) &&
-            !DateTimeOffset.TryParse(fieldValue, out fieldDate))
-        {
-            return false;
-        }
-
-        var daysAgo = now.AddDays(-days);
-        return after ? fieldDate > daysAgo : fieldDate < daysAgo;
+        return @operator == FlagContextFilterOperator.After ? fieldDate > daysAgo : fieldDate < daysAgo;
     }
 
-    private static bool CompareAbsoluteDate(string fieldValue, string comparisonValue, bool after)
+    private static bool CompareAbsoluteDate(
+        string fieldValue, string comparisonValue, FlagContextFilterOperator @operator, EvaluationErrors? errors, string field)
     {
-        if (!DateTimeOffset.TryParse(fieldValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var fieldDate) &&
-            !DateTimeOffset.TryParse(fieldValue, out fieldDate))
+        var contextValid = TryParseDate(fieldValue, out var fieldDate);
+        var targetingValid = TryParseDate(comparisonValue, out var comparisonDate);
+        if (!ValidateValues(contextValid, targetingValid, "a valid date", "a valid date", @operator, errors, field))
         {
             return false;
         }
 
-        if (!DateTimeOffset.TryParse(comparisonValue, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var comparisonDate) &&
-            !DateTimeOffset.TryParse(comparisonValue, out comparisonDate))
+        return @operator == FlagContextFilterOperator.DateAfter ? fieldDate >= comparisonDate : fieldDate <= comparisonDate;
+    }
+
+    private static bool TryParseNumber(string value, NumberStyles styles, out double number) =>
+        double.TryParse(value, styles, CultureInfo.InvariantCulture, out number) && !double.IsNaN(number);
+
+    private static bool TryParseDate(string value, out DateTimeOffset date) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out date) ||
+        DateTimeOffset.TryParse(value, out date);
+
+    private static bool ValidateValues(
+        bool contextValid, bool targetingValid, string contextExpected, string targetingExpected,
+        FlagContextFilterOperator @operator, EvaluationErrors? errors, string field)
+    {
+        var operatorName = FlagContextFilterOperatorJsonConverter.GetName(@operator);
+        if (!contextValid)
         {
-            return false;
+            errors?.AddInvalidContextValue(field, operatorName, contextExpected);
         }
 
-        return after ? fieldDate >= comparisonDate : fieldDate <= comparisonDate;
+        if (!targetingValid)
+        {
+            errors?.AddInvalidTargetingValue(field, operatorName, targetingExpected);
+        }
+
+        return contextValid && targetingValid;
     }
 
     private static void Recurse(object? value, string path, IDictionary<string, object?> result, bool preserveArrays)

@@ -273,6 +273,38 @@ internal sealed class FlagFilterDefinitionJsonConverter : JsonConverter<FlagFilt
 
 internal sealed class FlagContextFilterOperatorJsonConverter : JsonConverter<FlagContextFilterOperator>
 {
+    private static readonly IReadOnlyDictionary<FlagContextFilterOperator, string> Names =
+        new Dictionary<FlagContextFilterOperator, string>
+        {
+            [FlagContextFilterOperator.Is] = "IS",
+            [FlagContextFilterOperator.IsNot] = "IS_NOT",
+            [FlagContextFilterOperator.AnyOf] = "ANY_OF",
+            [FlagContextFilterOperator.NotAnyOf] = "NOT_ANY_OF",
+            [FlagContextFilterOperator.Contains] = "CONTAINS",
+            [FlagContextFilterOperator.NotContains] = "NOT_CONTAINS",
+            [FlagContextFilterOperator.Gt] = "GT",
+            [FlagContextFilterOperator.Lt] = "LT",
+            [FlagContextFilterOperator.After] = "AFTER",
+            [FlagContextFilterOperator.Before] = "BEFORE",
+            [FlagContextFilterOperator.DateAfter] = "DATE_AFTER",
+            [FlagContextFilterOperator.DateBefore] = "DATE_BEFORE",
+            [FlagContextFilterOperator.Set] = "SET",
+            [FlagContextFilterOperator.NotSet] = "NOT_SET",
+            [FlagContextFilterOperator.IsTrue] = "IS_TRUE",
+            [FlagContextFilterOperator.IsFalse] = "IS_FALSE",
+        };
+
+    private static readonly IReadOnlyDictionary<string, FlagContextFilterOperator> Operators =
+        Names.ToDictionary(pair => pair.Value, pair => pair.Key, StringComparer.Ordinal);
+
+    internal static bool IsKnown(FlagContextFilterOperator value) => Names.ContainsKey(value);
+
+    internal static string GetName(FlagContextFilterOperator value) =>
+        Names.TryGetValue(value, out var name) ? name : value == FlagContextFilterOperator.Unknown ? "UNKNOWN" : value.ToString();
+
+    internal static FlagContextFilterOperator Parse(string value) =>
+        Operators.TryGetValue(value, out var @operator) ? @operator : FlagContextFilterOperator.Unknown;
+
     public override FlagContextFilterOperator Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType != JsonTokenType.String)
@@ -280,50 +312,12 @@ internal sealed class FlagContextFilterOperatorJsonConverter : JsonConverter<Fla
             throw new JsonException("Flag context filter operator must be a string.");
         }
 
-        return reader.GetString() switch
-        {
-            "IS" => FlagContextFilterOperator.Is,
-            "IS_NOT" => FlagContextFilterOperator.IsNot,
-            "ANY_OF" => FlagContextFilterOperator.AnyOf,
-            "NOT_ANY_OF" => FlagContextFilterOperator.NotAnyOf,
-            "CONTAINS" => FlagContextFilterOperator.Contains,
-            "NOT_CONTAINS" => FlagContextFilterOperator.NotContains,
-            "GT" => FlagContextFilterOperator.Gt,
-            "LT" => FlagContextFilterOperator.Lt,
-            "AFTER" => FlagContextFilterOperator.After,
-            "BEFORE" => FlagContextFilterOperator.Before,
-            "DATE_AFTER" => FlagContextFilterOperator.DateAfter,
-            "DATE_BEFORE" => FlagContextFilterOperator.DateBefore,
-            "SET" => FlagContextFilterOperator.Set,
-            "NOT_SET" => FlagContextFilterOperator.NotSet,
-            "IS_TRUE" => FlagContextFilterOperator.IsTrue,
-            "IS_FALSE" => FlagContextFilterOperator.IsFalse,
-            var unknown => throw new JsonException($"Unknown flag context operator '{unknown}'."),
-        };
+        return Parse(reader.GetString()!);
     }
 
     public override void Write(Utf8JsonWriter writer, FlagContextFilterOperator value, JsonSerializerOptions options)
     {
-        writer.WriteStringValue(value switch
-        {
-            FlagContextFilterOperator.Is => "IS",
-            FlagContextFilterOperator.IsNot => "IS_NOT",
-            FlagContextFilterOperator.AnyOf => "ANY_OF",
-            FlagContextFilterOperator.NotAnyOf => "NOT_ANY_OF",
-            FlagContextFilterOperator.Contains => "CONTAINS",
-            FlagContextFilterOperator.NotContains => "NOT_CONTAINS",
-            FlagContextFilterOperator.Gt => "GT",
-            FlagContextFilterOperator.Lt => "LT",
-            FlagContextFilterOperator.After => "AFTER",
-            FlagContextFilterOperator.Before => "BEFORE",
-            FlagContextFilterOperator.DateAfter => "DATE_AFTER",
-            FlagContextFilterOperator.DateBefore => "DATE_BEFORE",
-            FlagContextFilterOperator.Set => "SET",
-            FlagContextFilterOperator.NotSet => "NOT_SET",
-            FlagContextFilterOperator.IsTrue => "IS_TRUE",
-            FlagContextFilterOperator.IsFalse => "IS_FALSE",
-            _ => throw new JsonException($"Unknown flag context operator '{value}'."),
-        });
+        writer.WriteStringValue(GetName(value));
     }
 }
 
