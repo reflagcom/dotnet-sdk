@@ -91,7 +91,7 @@ The SDK keeps definitions fresh in the background using push sync by default. Yo
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
 Check-event deduplication preserves context JSON types and array order while ignoring object-key order, including nested objects.
 
-### Array-valued context and diagnostics
+### Array-valued context
 
 Context attributes can contain native arrays, for example:
 
@@ -111,17 +111,7 @@ For array fields:
 
 Primitive elements are normalized to strings (null becomes `""`); composite elements are JSON-encoded. JSON-looking strings remain scalar strings. Scalar operator behavior is unchanged.
 
-Numeric, date, boolean, and percentage-rollout operators do not support arrays. Invalid conditions produce non-fatal diagnostics and **fail the entire affected rule closed**, even inside negations or otherwise-matching OR groups. Later rules can still match.
-
-Targeting diagnostics use the following codes:
-
-- `MISSING_CONTEXT_FIELD`: a required context field is absent.
-- `UNSUPPORTED_ARRAY_OPERATOR`: a scalar-only operator received an array.
-- `INVALID_CONTEXT_VALUE`: a numeric or date operator received an invalid context value.
-- `INVALID_TARGETING_VALUE`: a numeric or date comparison value (including a relative-date day offset) is invalid.
-- `UNKNOWN_OPERATOR`: the targeting operator is not recognized. Other rules and flags remain evaluable.
-
-Online flag checks made before `InitializeAsync()` completes also include `CLIENT_NOT_INITIALIZED` in telemetry. This check-only diagnostic is not added to bootstrap results or offline evaluations. Always await `InitializeAsync()` before evaluating flags.
+Numeric, date, boolean, and percentage-rollout operators do not support arrays.
 
 ## Fallback provider
 
