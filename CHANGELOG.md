@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.2.0...v0.3.0) (2026-10-06)
+
+
+### Features
+
+* add structured scalar evaluation diagnostics ([#16](https://github.com/reflagcom/dotnet-sdk/issues/16)) ([6dfab7b](https://github.com/reflagcom/dotnet-sdk/commit/6dfab7b8776f26edbcdcfe0148c61dd1e820d82c))
+
 ## [0.2.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.1.0...v0.2.0) (2026-09-15)
 
 
