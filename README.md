@@ -113,7 +113,7 @@ Primitive elements are normalized to strings (null becomes `""`); composite elem
 
 Numeric, date, boolean, and percentage-rollout operators do not support arrays. Invalid conditions produce non-fatal diagnostics and **fail the entire affected rule closed**, even inside negations or otherwise-matching OR groups. Later rules can still match.
 
-Targeting diagnostics use the same codes as the Node SDK:
+Targeting diagnostics use the following codes:
 
 - `MISSING_CONTEXT_FIELD`: a required context field is absent.
 - `UNSUPPORTED_ARRAY_OPERATOR`: a scalar-only operator received an array.
