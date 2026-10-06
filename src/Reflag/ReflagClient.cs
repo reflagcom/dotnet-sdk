@@ -9,6 +9,13 @@ namespace Reflag;
 
 public sealed class ReflagClient : IAsyncDisposable
 {
+    private static readonly ReflagEvaluationError ClientNotInitializedError = new()
+    {
+        Code = "CLIENT_NOT_INITIALIZED",
+        Field = string.Empty,
+        Message = "ReflagClient was not initialized before this flag was evaluated. Call InitializeAsync() before evaluating flags.",
+    };
+
     private readonly object _initializeGate = new();
     private readonly object _overridesGate = new();
     private readonly CancellationTokenSource _disposeCancellationTokenSource = new();
@@ -175,7 +182,8 @@ public sealed class ReflagClient : IAsyncDisposable
         var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(context);
         var normalizedTelemetry = NormalizeTelemetryOptions(telemetryOptions);
 
-        if (!_initializationFinished)
+        var evaluatedBeforeInitialization = !_initializationFinished && !_config.Offline;
+        if (evaluatedBeforeInitialization)
         {
             _logger.LogError("flag access: ReflagClient is not initialized yet.");
         }
@@ -185,7 +193,7 @@ public sealed class ReflagClient : IAsyncDisposable
         var rawFlag = EvaluateFlag(key, normalizedContext, definitions);
 
         WarnFlagEvaluationDiagnostics(rawFlag);
-        TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag);
+        TryQueueCheckEvent(normalizedContext, normalizedTelemetry, rawFlag, evaluatedBeforeInitialization);
         return rawFlag.Value;
     }
 
@@ -197,7 +205,7 @@ public sealed class ReflagClient : IAsyncDisposable
         var normalizedContext = ReflagContextNormalizer.NormalizeTypedContext(context);
         var normalizedTelemetry = NormalizeTelemetryOptions(telemetryOptions);
 
-        if (!_initializationFinished)
+        if (!_initializationFinished && !_config.Offline)
         {
             _logger.LogError("flag access: ReflagClient is not initialized yet.");
         }
@@ -964,7 +972,8 @@ public sealed class ReflagClient : IAsyncDisposable
             ["errors"] = JsonSerializer.Serialize(flag.Errors
                 .OrderBy(error => error.Code, StringComparer.Ordinal)
                 .ThenBy(error => error.Field, StringComparer.Ordinal)
-                .ThenBy(error => error.Operator, StringComparer.Ordinal)),
+                .ThenBy(error => error.Operator, StringComparer.Ordinal)
+                .Select(error => new[] { error.Code, error.Field, error.Operator ?? string.Empty })),
         });
 
         if (!_rateLimiter.IsAllowed(warningKey))
@@ -973,7 +982,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _logger.LogWarning(
-            "flag targeting rules might not be correctly evaluated. {EvaluationErrors}",
+            "flag targeting rules could not be fully evaluated. {EvaluationErrors}",
             new Dictionary<string, IReadOnlyList<ReflagEvaluationError>>
             {
                 [flag.Key] = flag.Errors,
@@ -983,21 +992,22 @@ public sealed class ReflagClient : IAsyncDisposable
     private void TryQueueCheckEvent(
         ReflagContext context,
         ReflagTelemetryOptions? telemetryOptions,
-        RawReflagFlag flag)
+        RawReflagFlag flag,
+        bool evaluatedBeforeInitialization)
     {
         if (telemetryOptions?.EnableTelemetry == false || _config.Offline)
         {
             return;
         }
 
-        _ = SendFlagCheckEventSafeAsync(context, flag);
+        _ = SendFlagCheckEventSafeAsync(context, flag, evaluatedBeforeInitialization);
     }
 
-    private async Task SendFlagCheckEventSafeAsync(ReflagContext context, RawReflagFlag flag)
+    private async Task SendFlagCheckEventSafeAsync(ReflagContext context, RawReflagFlag flag, bool evaluatedBeforeInitialization)
     {
         try
         {
-            await SendFlagCheckEventAsync(context, flag, CancellationToken.None).ConfigureAwait(false);
+            await SendFlagCheckEventAsync(context, flag, evaluatedBeforeInitialization, CancellationToken.None).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_disposed)
         {
@@ -1012,6 +1022,7 @@ public sealed class ReflagClient : IAsyncDisposable
     private async Task SendFlagCheckEventAsync(
         ReflagContext context,
         RawReflagFlag flag,
+        bool evaluatedBeforeInitialization,
         CancellationToken cancellationToken)
     {
         var evaluationContext = ReflagContextNormalizer.ToEvaluationObject(context);
@@ -1040,7 +1051,9 @@ public sealed class ReflagClient : IAsyncDisposable
                 EvalContext = evaluationContext,
                 EvalRuleResults = flag.RuleEvaluationResults,
                 EvalMissingFields = flag.MissingContextFields,
-                EvalErrors = flag.Errors,
+                EvalErrors = evaluatedBeforeInitialization
+                    ? (flag.Errors ?? Array.Empty<ReflagEvaluationError>()).Concat(new[] { ClientNotInitializedError }).ToArray()
+                    : flag.Errors,
             },
             cancellationToken).ConfigureAwait(false);
     }

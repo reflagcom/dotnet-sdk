@@ -91,7 +91,7 @@ The SDK keeps definitions fresh in the background using push sync by default. Yo
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
 Check-event deduplication preserves context JSON types and array order while ignoring object-key order, including nested objects.
 
-### Array-valued context and diagnostics
+### Array-valued context
 
 Context attributes can contain native arrays, for example:
 
@@ -111,11 +111,7 @@ For array fields:
 
 Primitive elements are normalized to strings (null becomes `""`); composite elements are JSON-encoded. JSON-looking strings remain scalar strings. Scalar operator behavior is unchanged.
 
-Numeric, date, boolean, and percentage-rollout operators do not support arrays. Unsupported operations and required missing fields produce non-fatal diagnostics and **fail the entire affected rule closed**, even inside negations or otherwise-matching OR groups. Later rules can still match.
-
-Diagnostics are available as `RawReflagFlag.Errors` in bootstrap results, logged with rate limiting, and sent as `evalErrors` in flag-check telemetry. Bootstrap JSON uses `evaluationErrors` for compatibility with JavaScript clients. Legacy `MissingContextFields` / `evalMissingFields` remain available.
-
-**Release prerequisite:** the ingest service must support `evalErrors` before releasing these changes (the same prerequisite as JavaScript SDK PR #724).
+Numeric, date, boolean, and percentage-rollout operators do not support arrays.
 
 ## Fallback provider
 

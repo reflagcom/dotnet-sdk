@@ -125,7 +125,7 @@ public sealed class ReflagEventTrackOptions : ReflagTrackOptions
     public string? CompanyId { get; init; }
 }
 
-/// <summary>A non-fatal diagnostic from evaluating a targeting rule.</summary>
+/// <summary>A non-fatal flag evaluation diagnostic.</summary>
 public sealed class ReflagEvaluationError
 {
     [JsonPropertyName("code")]
@@ -262,8 +262,12 @@ public enum FlagContextFilterOperator
     NotSet,
     IsTrue,
     IsFalse,
+
+    /// <summary>An unrecognized operator received in a flag definition.</summary>
+    Unknown = -1,
 }
 
+[JsonConverter(typeof(FlagContextFilterDefinitionJsonConverter))]
 public sealed class FlagContextFilterDefinition : FlagFilterDefinition
 {
     public override string Type => "context";
@@ -273,6 +277,9 @@ public sealed class FlagContextFilterDefinition : FlagFilterDefinition
 
     [JsonPropertyName("operator")]
     public FlagContextFilterOperator Operator { get; init; }
+
+    // Retain unrecognized wire names for diagnostics and fallback snapshot round trips.
+    internal string? UnknownOperator { get; init; }
 
     [JsonPropertyName("values")]
     public IReadOnlyList<string> Values { get; init; } = Array.Empty<string>();
