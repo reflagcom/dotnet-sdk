@@ -121,7 +121,7 @@ Targeting diagnostics use the following codes:
 - `INVALID_TARGETING_VALUE`: a numeric or date comparison value (including a relative-date day offset) is invalid.
 - `UNKNOWN_OPERATOR`: the targeting operator is not recognized. Other rules and flags remain evaluable.
 
-Diagnostics are available as `RawReflagFlag.Errors` in bootstrap results, logged with rate limiting, and sent as `evalErrors` in flag-check telemetry. Messages do not include raw context or comparison values. Bootstrap JSON uses `evaluationErrors` for compatibility with JavaScript clients. Legacy `MissingContextFields` / `evalMissingFields` remain available.
+Diagnostics appear in bootstrap results (`RawReflagFlag.Errors`), rate-limited warnings, and flag-check telemetry.
 
 Online flag checks made before `InitializeAsync()` completes also include `CLIENT_NOT_INITIALIZED` in telemetry. This check-only diagnostic is not added to bootstrap results or offline evaluations. Always await `InitializeAsync()` before evaluating flags.
 
