@@ -1034,6 +1034,7 @@ public sealed class ReflagClient : IAsyncDisposable
             ["targetingVersion"] = flag.TargetingVersion,
             ["evalResult"] = flag.Value,
             ["contextKey"] = BuildContextKey(evaluationContext),
+            ["evaluatedBeforeInitialization"] = evaluatedBeforeInitialization,
         });
 
         if (!_rateLimiter.IsAllowed(dedupeKey))
