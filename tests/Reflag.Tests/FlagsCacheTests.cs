@@ -22,7 +22,7 @@ public sealed class FlagsCacheTests
             }
 
             return Task.FromResult<FlagsCacheRefreshResult?>(new FlagsCacheRefreshResult(
-                [CreateCompiledDefinition("newest")],
+                CreateCollection("newest"),
                 22));
         }
 
@@ -33,13 +33,13 @@ public sealed class FlagsCacheTests
         var refresh21Task = cache.RefreshAsync(21, CancellationToken.None);
         var refresh22Task = cache.RefreshAsync(22, CancellationToken.None);
 
-        firstRefresh.SetResult(new FlagsCacheRefreshResult([CreateCompiledDefinition("first")], 20));
+        firstRefresh.SetResult(new FlagsCacheRefreshResult(CreateCollection("first"), 20));
         await refreshTask;
         await refresh21Task;
         await refresh22Task;
 
         Assert.Equal(new int?[] { null, 22 }, calls);
-        Assert.Equal("newest", cache.Get()![0].Definition.Key);
+        Assert.Equal("newest", cache.Get()!.Definitions.Flags[0].Key);
         Assert.Equal(22, cache.GetFlagStateVersion());
         cache.Destroy();
     }
@@ -49,8 +49,8 @@ public sealed class FlagsCacheTests
     {
         var queue = new Queue<FlagsCacheRefreshResult?>(
         [
-            new FlagsCacheRefreshResult([CreateCompiledDefinition("newer")], 30),
-            new FlagsCacheRefreshResult([CreateCompiledDefinition("older")], 20),
+            new FlagsCacheRefreshResult(CreateCollection("newer"), 30),
+            new FlagsCacheRefreshResult(CreateCollection("older"), 20),
         ]);
 
         var cache = new FlagsCache(
@@ -60,7 +60,7 @@ public sealed class FlagsCacheTests
         await cache.RefreshAsync(null, CancellationToken.None);
         await cache.RefreshAsync(null, CancellationToken.None);
 
-        Assert.Equal("newer", cache.Get()![0].Definition.Key);
+        Assert.Equal("newer", cache.Get()!.Definitions.Flags[0].Key);
         Assert.Equal(30, cache.GetFlagStateVersion());
         cache.Destroy();
     }
@@ -98,7 +98,7 @@ public sealed class FlagsCacheTests
 
         var secondRefreshTask = cache.RefreshAsync(null, CancellationToken.None);
 
-        firstFetch.SetResult(new FlagsCacheRefreshResult([CreateCompiledDefinition("first")], 1));
+        firstFetch.SetResult(new FlagsCacheRefreshResult(CreateCollection("first"), 1));
 
         var completed = await Task.WhenAny(firstRefreshTask, Task.Delay(TimeSpan.FromSeconds(1)));
         Assert.Same(firstRefreshTask, completed);
@@ -109,23 +109,18 @@ public sealed class FlagsCacheTests
         Assert.Same(secondFetchStarted.Task, secondFetchStartedCompleted);
         Assert.False(secondRefreshTask.IsCompleted);
 
-        secondFetch.SetResult(new FlagsCacheRefreshResult([CreateCompiledDefinition("second")], 2));
+        secondFetch.SetResult(new FlagsCacheRefreshResult(CreateCollection("second"), 2));
         await secondRefreshTask;
 
         Assert.Equal(new int?[] { null, null }, calls);
-        Assert.Equal("second", cache.Get()![0].Definition.Key);
+        Assert.Equal("second", cache.Get()!.Definitions.Flags[0].Key);
         cache.Destroy();
     }
 
-    private static CompiledFlagDefinition CreateCompiledDefinition(string key)
+    private static PreparedFlagCollection CreateCollection(string key)
     {
-        return new CompiledFlagDefinition
-        {
-            Definition = TestDefinitions.CreateFlag(key, 1, new FlagConstantFilterDefinition { Value = true }),
-            Evaluator = FlagEvaluation.NewEvaluator(
-            [
-                new EvaluationRule<bool>(new CompiledConstantFilter(true), true),
-            ]),
-        };
+        return PreparedFlagCollection.Prepare(
+            [TestDefinitions.CreateFlag(key, 1, new FlagConstantFilterDefinition { Value = true })],
+            []);
     }
 }

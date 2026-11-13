@@ -82,10 +82,38 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddReflag(new ReflagClientOptions());
 ```
 
+## Multivariate flags
+
+Boolean (release) flags and multivariate flags are read with the same `GetFlag` method.
+Without a default, `GetFlag` reads a Boolean and returns `false` when the flag is missing, unresolved, or not a Boolean.
+Pass a default value to read any JSON value as the default's type:
+
+```csharp
+public sealed record ModelConfig(string Name, int MaxTokens);
+
+var model = client.GetFlag("model", context, new ModelConfig("small", 1000));
+var theme = client.GetFlag("theme", context, "light");
+var limit = client.GetFlag("upload-limit-mb", context, 10);
+
+// Arbitrary JSON: JsonElement, JsonNode or object.
+var raw = client.GetFlag<JsonNode?>("model", context, null);
+
+// Bound clients have the same overloads.
+var bound = client.BindClient(context);
+var boundModel = bound.GetFlag("model", new ModelConfig("small", 1000));
+```
+
+The default is returned when the flag is missing or no variant was selected, and when the value cannot be read as the default's type, for example an object read as a `string`. Mismatches log a warning. JSON `null` is a real value for `JsonElement`, `JsonNode` and `object` reads; other types get the default instead.
+
+`GetFlags(context)` returns every flag's JSON value (`null` when no value is available) and registers a check for each one.
+
+Every read registers a check event with the selected **variant key**, never the JSON value, together with the flag version, the matched rule and the `flagStateVersion`. When the default is used instead, the check carries diagnostics but no selection.
+
 ## High performance flag targeting
 
-`InitializeAsync()` fetches the current flag definitions from Reflag.
-After that, `GetFlag(...)` and `GetFlagsForBootstrap(...)` evaluate flags locally against the in-memory cached definitions, so ordinary flag reads do not need a network round trip after initialization completes.
+`InitializeAsync()` fetches the complete flag collection from Reflag (`GET /flags`): compiled flags, their variants, and the segments they reference.
+After that, `GetFlag(...)`, `GetFlags(...)` and `GetFlagsForBootstrap(...)` evaluate flags locally against the in-memory cached collection, so ordinary flag reads do not need a network round trip after initialization completes.
+Rules can reference segments and other flags' selected variants. The whole collection is validated before it replaces the cached copy. An incomplete, cyclic or malformed collection is rejected and the SDK keeps its current definitions, or falls back.
 
 The SDK keeps definitions fresh in the background using push sync by default. You can switch to polling mode instead.
 It also batches tracking-related events and applies internal dedupe/rate limiting to optimize tracking traffic.
@@ -111,7 +139,19 @@ For array fields:
 
 Primitive elements are normalized to strings (null becomes `""`); composite elements are JSON-encoded. JSON-looking strings remain scalar strings. Scalar operator behavior is unchanged.
 
-Numeric, date, boolean, and percentage-rollout operators do not support arrays.
+Numeric, date, boolean, percentage-rollout, and percentage-distribution operators do not support arrays.
+
+### Evaluation diagnostics
+
+Non-fatal diagnostics are reported in bootstrap payloads and check events, and logged as rate-limited warnings:
+
+- `MISSING_CONTEXT_FIELD`: a rule needs a context field that was not provided.
+- `UNSUPPORTED_ARRAY_OPERATOR`: an operator was applied to an array-valued field.
+- `INVALID_COMPARISON`: a numeric or date comparison could not be made. Messages never include context values.
+- `INVALID_FLAG_DEFINITION`: no rule selected a variant.
+- `CLIENT_NOT_INITIALIZED`: the flag was read before `InitializeAsync()` completed. This appears in check events only.
+
+Diagnostics that come from a referenced flag or segment include `source` (`{ "type": "flag" | "segment", "key": ... }`).
 
 ## Fallback provider
 
@@ -144,6 +184,13 @@ var client = new ReflagClient(new ReflagClientOptions
 });
 ```
 
+Static fallbacks can also provide JSON values for multivariate flags, with `ReflagFallbackProviders.Static(new Dictionary<string, object?> { ["model"] = new { name = "small" } })`.
+Static values do not identify authored variants, so their checks carry no selection.
+
+Snapshots use schema version 2: the complete collection, including segments and `flagStateVersion`. Only collections the SDK accepted are saved, one at a time, so an older save cannot overwrite a newer one.
+Version 2 snapshots are stored under new names (`flags-fallback-v2-<hash>.json`, or `<prefix>:v2:<hash>` in Redis), so SDK versions before 0.3 and newer ones do not overwrite each other's snapshots.
+Snapshots with schema version 1, written by earlier SDK versions, cannot be evaluated and are ignored.
+
 File fallback example:
 
 ```csharp
@@ -160,6 +207,29 @@ var client = new ReflagClient(new ReflagClientOptions
 
 If you are serializing flags into another runtime or handing them off to a client application, use `GetFlagsForBootstrap(...)`.
 It returns JSON-serializable flag data together with the context used for evaluation, which bootstrap flows need.
+Bootstrapping is not a flag read, so it does not register check events. The client SDK registers checks when it reads the flags.
+
+The payload uses protocol version 2, which the v2 browser, React and Vue SDKs consume:
+
+```json
+{
+  "protocolVersion": 2,
+  "context": { "company": { "id": "company-456", "name": "Acme" }, "user": { "id": "user-123" } },
+  "flags": {
+    "model": {
+      "flagKey": "model",
+      "resolved": true,
+      "value": { "name": "large" },
+      "variantKey": "quality",
+      "sourceVersionId": "...",
+      "matchedRuleId": "...",
+      "ruleResults": [{ "ruleId": "...", "matched": true, "destination": { "type": "variant", "variantKey": "quality" } }],
+      "errors": []
+    }
+  },
+  "flagStateVersion": 42
+}
+```
 
 ```csharp
 var bootstrapped = client.GetFlagsForBootstrap(new ReflagContext
@@ -196,9 +266,10 @@ var bound = client.BindClient(new ReflagContext
 var bootstrapped = bound.GetFlagsForBootstrap();
 ```
 
-## Remote config
+## Remote config and remote evaluation
 
-Not supported at the moment.
+Use multivariate flags with `GetFlag(key, context, defaultValue)` for JSON configuration values.
+Remote evaluation (`/flags/evaluated`) is not supported by the .NET SDK at the moment.
 
 ## Configuring
 
@@ -240,7 +311,7 @@ Constructor options currently available:
 | `FetchTimeout` | `TimeSpan?` | Default `10s` | - |
 | `FlagsFetchRetries` | `int?` | Default `3` | - |
 | `Batch` | `ReflagBatchOptions?` | Max size, interval, shutdown flush | - |
-| `FlagOverrides` | `IReadOnlyDictionary<string, bool>?` | Base local overrides | `REFLAG_FLAGS_ENABLED`, `REFLAG_FLAGS_DISABLED` |
+| `FlagOverrides` | `IReadOnlyDictionary<string, bool>?` | Base local overrides. Use `SetFlagOverrides(...)` for JSON values | `REFLAG_FLAGS_ENABLED`, `REFLAG_FLAGS_DISABLED` |
 | `FlagOverridesFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, bool>>?` | Context-dependent base overrides | - |
 | `Offline` | `bool?` | Disables network I/O | `REFLAG_OFFLINE` |
 | `FlagsSyncMode` | `ReflagFlagsSyncMode?` | Default is `Push` | - |
@@ -327,6 +398,23 @@ using (client.PushFlagOverrides(context => new Dictionary<string, bool>
         }));
 }
 ```
+
+### JSON overrides for multivariate flags
+
+`SetFlagOverrides(...)` and `PushFlagOverrides(...)` also accept `IReadOnlyDictionary<string, object?>` (or a function returning one) for JSON values:
+
+```csharp
+using (client.PushFlagOverrides(new Dictionary<string, object?>
+{
+    ["model"] = new { name = "large", maxTokens = 8000 },
+}))
+{
+    var model = client.GetFlag("model", context, new ModelConfig("small", 1000));
+}
+```
+
+Overrides apply after evaluation. Flags that reference an overridden flag still see its evaluated variant.
+Overridden values are not authored selections, so their checks and bootstrap entries are unresolved.
 
 ### Additional ways to provide flag overrides
 

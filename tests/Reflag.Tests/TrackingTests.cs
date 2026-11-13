@@ -11,7 +11,7 @@ public sealed class TrackingTests
     public async Task BindClient_followed_by_FlushAsync_sends_company_and_user_bulk_items()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
         var logger = new TestLogger();
 
         await using var client = new ReflagClient(new ReflagClientOptions
@@ -71,7 +71,7 @@ public sealed class TrackingTests
     public async Task GetFlagsForBootstrap_followed_by_FlushAsync_sends_context_sync_events()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
 
         await using var client = new ReflagClient(new ReflagClientOptions
         {
@@ -147,7 +147,7 @@ public sealed class TrackingTests
     public async Task BoundClient_TrackAsync_uses_bound_user_and_company()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
 
         await using var client = new ReflagClient(new ReflagClientOptions
         {
@@ -221,7 +221,7 @@ public sealed class TrackingTests
     public async Task Telemetry_disabled_prevents_context_sync_and_bound_tracking()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
         var logger = new TestLogger();
 
         await using var client = new ReflagClient(new ReflagClientOptions

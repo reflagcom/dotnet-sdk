@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 namespace Reflag.Internal;
 
 internal sealed record FlagsCacheRefreshResult(
-    CompiledFlagDefinition[] Definitions,
+    PreparedFlagCollection Definitions,
     int? FlagStateVersion);
 
 internal sealed class FlagsCache
@@ -16,7 +16,7 @@ internal sealed class FlagsCache
 
     private readonly List<RefreshWaiter> _waiters = [];
 
-    private CompiledFlagDefinition[]? _value;
+    private PreparedFlagCollection? _value;
     private int? _flagStateVersion;
     private Task? _drainTask;
     private DateTimeOffset? _lastRefreshAt;
@@ -38,7 +38,7 @@ internal sealed class FlagsCache
         _minRefreshInterval = minRefreshInterval ?? ReflagConstants.MinRefreshInterval;
     }
 
-    public CompiledFlagDefinition[]? Get()
+    public PreparedFlagCollection? Get()
     {
         lock (_gate)
         {
@@ -62,7 +62,7 @@ internal sealed class FlagsCache
         }
     }
 
-    public async Task<CompiledFlagDefinition[]?> RefreshAsync(int? waitForVersion, CancellationToken cancellationToken)
+    public async Task<PreparedFlagCollection?> RefreshAsync(int? waitForVersion, CancellationToken cancellationToken)
     {
         Task? waiterTask;
         lock (_gate)
