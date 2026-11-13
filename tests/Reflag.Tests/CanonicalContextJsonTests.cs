@@ -10,7 +10,7 @@ public sealed class CanonicalContextJsonTests
     public async Task Check_deduplication_preserves_context_types_and_ignores_object_key_order()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
         await using var client = new ReflagClient(new ReflagClientOptions
         {
             SecretKey = "validSecretKeyWithMoreThan22Chars",

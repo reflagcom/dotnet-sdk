@@ -31,7 +31,7 @@ public sealed class ReflagClientTests
     public async Task AddReflag_registers_client_and_initializes_it_via_hosted_service()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
 
         var services = new ServiceCollection();
         services.AddReflag(_ => new ReflagClientOptions
@@ -57,7 +57,7 @@ public sealed class ReflagClientTests
     public async Task AddReflag_hosted_service_stop_flushes_buffered_events_by_default()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
 
         var services = new ServiceCollection();
         services.AddReflag(_ => new ReflagClientOptions
@@ -214,25 +214,17 @@ public sealed class ReflagClientTests
     public async Task InitializeAsync_fetches_flags_and_evaluates_locally()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson(JsonSerializer.Serialize(
-            new FeaturesEnvelope
-            {
-                Success = true,
-                FlagStateVersion = 1,
-                Features =
-                [
-                    TestDefinitions.CreateFlag(
-                        "new-dashboard",
-                        7,
-                        new FlagContextFilterDefinition
-                        {
-                            Field = "company.id",
-                            Operator = FlagContextFilterOperator.Is,
-                            Values = ["company-123"],
-                        }),
-                ],
-            },
-            ReflagJson.Options));
+        transport.EnqueueGetJson(TestDefinitions.FlagsResponse(
+            1,
+            TestDefinitions.CreateFlag(
+                "new-dashboard",
+                7,
+                new FlagContextFilterDefinition
+                {
+                    Field = "company.id",
+                    Operator = FlagContextFilterOperator.Is,
+                    Values = ["company-123"],
+                })));
 
         var logger = new TestLogger();
         await using var client = new ReflagClient(new ReflagClientOptions
@@ -260,9 +252,11 @@ public sealed class ReflagClientTests
             });
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["new-dashboard"].Value);
+        Assert.True(bootstrapped.Flags["new-dashboard"].Value!.Value.GetBoolean());
+        Assert.True(bootstrapped.Flags["new-dashboard"].Resolved);
+        Assert.Equal("on", bootstrapped.Flags["new-dashboard"].VariantKey);
         Assert.Equal(1, bootstrapped.FlagStateVersion);
-        Assert.Equal("https://api.example.com/path/features", transport.GetCalls.Single().Url.ToString());
+        Assert.Equal("https://api.example.com/path/flags", transport.GetCalls.Single().Url.ToString());
         Assert.Equal("dotnet-sdk/0.2.0", transport.GetCalls.Single().Headers["reflag-sdk-version"]); // x-release-please-version
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Information && entry.Message.Contains("Reflag initialized in"));
     }
@@ -285,7 +279,8 @@ public sealed class ReflagClientTests
         var bootstrapped = client.GetFlagsForBootstrap(new ReflagContext());
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["forced-flag"].Value);
+        Assert.True(bootstrapped.Flags["forced-flag"].Value!.Value.GetBoolean());
+        Assert.False(bootstrapped.Flags["forced-flag"].Resolved);
         Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Error && entry.Message.Contains("flag access: ReflagClient is not initialized yet."));
     }
@@ -357,10 +352,12 @@ public sealed class ReflagClientTests
         var definitions = client.GetFlagDefinitions();
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["fallback-flag"].Value);
+        Assert.True(bootstrapped.Flags["fallback-flag"].Value!.Value.GetBoolean());
+        // Static values do not identify authored variants.
+        Assert.False(bootstrapped.Flags["fallback-flag"].Resolved);
+        Assert.Null(bootstrapped.Flags["fallback-flag"].VariantKey);
         Assert.Null(bootstrapped.FlagStateVersion);
-        Assert.Single(definitions);
-        Assert.Equal(0, definitions[0].Targeting.Version);
+        Assert.Equal("static:fallback-flag", Assert.Single(definitions.Flags).SourceVersionId);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("remote flags unavailable, using fallback flags fetched"));
     }
 
@@ -391,14 +388,5 @@ public sealed class ReflagClientTests
     private static Task AssertDisposedAsync(Func<Task> action)
     {
         return Assert.ThrowsAsync<ObjectDisposedException>(action);
-    }
-
-    private sealed class FeaturesEnvelope
-    {
-        public bool Success { get; init; }
-
-        public int FlagStateVersion { get; init; }
-
-        public IReadOnlyList<FlagDefinition> Features { get; init; } = Array.Empty<FlagDefinition>();
     }
 }
