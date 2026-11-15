@@ -12,11 +12,6 @@ internal sealed class PreparedFlagCollection
         TrackSelections = trackSelections;
     }
 
-    public static PreparedFlagCollection Empty { get; } = new(
-        new FlagDefinitions(),
-        new FlagCollectionEvaluator(Array.Empty<FlagDefinition>(), Array.Empty<SegmentDefinition>()),
-        trackSelections: true);
-
     public FlagDefinitions Definitions { get; }
 
     public FlagCollectionEvaluator Evaluator { get; }
@@ -94,7 +89,6 @@ internal sealed class PreparedFlagCollection
             FlagConstantFilterDefinition => true,
             FlagContextFilterDefinition context =>
                 context.Field is not null &&
-                context.Operator != FlagContextFilterOperator.Unknown &&
                 FlagContextFilterOperatorJsonConverter.IsKnown(context.Operator) &&
                 context.Values is not null &&
                 context.Values.All(value => value is not null),

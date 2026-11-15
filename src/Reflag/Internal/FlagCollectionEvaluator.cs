@@ -5,8 +5,8 @@ namespace Reflag.Internal;
 
 /// <summary>
 /// Protocol-v2 collection evaluator, ported from <c>@reflag/flag-evaluation</c> 2.x.
-/// Prepare once per definition refresh; evaluation resolves flag/segment references recursively
-/// without caching context-dependent results.
+/// Prepare once per definition refresh; evaluation resolves flag/segment references recursively,
+/// memoizing dependency results only within a single evaluation call.
 /// Throws for duplicate keys, missing references, unknown referenced variants and cycles.
 /// </summary>
 internal sealed class FlagCollectionEvaluator
@@ -49,8 +49,6 @@ internal sealed class FlagCollectionEvaluator
         ValidateReferences();
     }
 
-    public IEnumerable<string> FlagKeys => _flags.Keys;
-
     public bool HasFlag(string key) => _flags.ContainsKey(key);
 
     /// <summary>Evaluates every flag against one normalized context. Unresolved flags do not affect others.</summary>
@@ -81,6 +79,17 @@ internal sealed class FlagCollectionEvaluator
     internal static int HashInt(string hashInput) => Hashing.HashInt(hashInput);
 
     private RawReflagFlag EvaluatePreparedFlag(PreparedFlag flag, EvaluationState state)
+    {
+        if (!state.Flags.TryGetValue(flag.Key, out var result))
+        {
+            result = EvaluateUncachedFlag(flag, state);
+            state.Flags.Add(flag.Key, result);
+        }
+
+        return result;
+    }
+
+    private RawReflagFlag EvaluateUncachedFlag(PreparedFlag flag, EvaluationState state)
     {
         var errors = new ErrorSet();
         var filterErrors = new ErrorSet();
@@ -237,13 +246,20 @@ internal sealed class FlagCollectionEvaluator
 
             case SegmentReferenceFilter segmentReference:
                 {
-                    var segmentErrors = new ErrorSet();
-                    var segmentDiagnostics = new ErrorSet();
-                    var matched = EvaluateFilter(_segments[segmentReference.Key], state, segmentErrors, segmentDiagnostics);
-                    PropagateErrors(segmentDiagnostics.Values, "segment", segmentReference.Key, diagnostics, null);
+                    if (!state.Segments.TryGetValue(segmentReference.Key, out var result))
+                    {
+                        var segmentErrors = new ErrorSet();
+                        var segmentDiagnostics = new ErrorSet();
+                        var matched = EvaluateFilter(_segments[segmentReference.Key], state, segmentErrors, segmentDiagnostics);
+                        result = new SegmentEvaluationResult(matched, segmentErrors.ToArray(), segmentDiagnostics.ToArray());
+                        state.Segments.Add(segmentReference.Key, result);
+                    }
+
+                    // Every reference still propagates diagnostics, even when the predicate was cached.
+                    PropagateErrors(result.Diagnostics, "segment", segmentReference.Key, diagnostics, null);
                     // Segments are predicates, not sets of independent enable rules.
-                    PropagateErrors(segmentErrors.Values, "segment", segmentReference.Key, diagnostics, errors);
-                    return matched && segmentErrors.Count == 0;
+                    PropagateErrors(result.Errors, "segment", segmentReference.Key, diagnostics, errors);
+                    return result.Matched && result.Errors.Length == 0;
                 }
 
             case GroupFilter group:
@@ -628,7 +644,17 @@ internal sealed class FlagCollectionEvaluator
         }
     }
 
-    private sealed record EvaluationState(IReadOnlyDictionary<string, object?> Context, DateTimeOffset Now);
+    private sealed record EvaluationState(IReadOnlyDictionary<string, object?> Context, DateTimeOffset Now)
+    {
+        public Dictionary<string, RawReflagFlag> Flags { get; } = new(StringComparer.Ordinal);
+
+        public Dictionary<string, SegmentEvaluationResult> Segments { get; } = new(StringComparer.Ordinal);
+    }
+
+    private sealed record SegmentEvaluationResult(
+        bool Matched,
+        ReflagEvaluationError[] Errors,
+        ReflagEvaluationError[] Diagnostics);
 
     private sealed record PreparedFlag(
         string Key,

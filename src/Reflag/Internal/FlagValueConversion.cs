@@ -51,18 +51,7 @@ internal static class FlagValueConversion
         _ => "undefined",
     };
 
-    public static IReadOnlyDictionary<string, JsonElement> ToJsonOverrides(IReadOnlyDictionary<string, bool> overrides)
-    {
-        var result = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var pair in overrides)
-        {
-            result[pair.Key] = JsonSerializer.SerializeToElement(pair.Value);
-        }
-
-        return result;
-    }
-
-    public static IReadOnlyDictionary<string, JsonElement> ToJsonOverrides(IReadOnlyDictionary<string, object?> overrides)
+    public static IReadOnlyDictionary<string, JsonElement> ToJsonOverrides<T>(IReadOnlyDictionary<string, T> overrides)
     {
         var result = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var pair in overrides)
@@ -75,14 +64,8 @@ internal static class FlagValueConversion
         return result;
     }
 
-    public static Func<ReflagContext, IReadOnlyDictionary<string, JsonElement>> ToJsonOverridesFactory(
-        Func<ReflagContext, IReadOnlyDictionary<string, bool>> factory)
-    {
-        return context => factory(context) is { } overrides ? ToJsonOverrides(overrides) : new Dictionary<string, JsonElement>();
-    }
-
-    public static Func<ReflagContext, IReadOnlyDictionary<string, JsonElement>> ToJsonOverridesFactory(
-        Func<ReflagContext, IReadOnlyDictionary<string, object?>> factory)
+    public static Func<ReflagContext, IReadOnlyDictionary<string, JsonElement>> ToJsonOverridesFactory<T>(
+        Func<ReflagContext, IReadOnlyDictionary<string, T>> factory)
     {
         return context => factory(context) is { } overrides ? ToJsonOverrides(overrides) : new Dictionary<string, JsonElement>();
     }

@@ -129,9 +129,11 @@ public sealed class ReflagBootstrappedFlags
 public sealed class FlagDefinitions
 {
     [JsonPropertyName("flags")]
+    [JsonRequired]
     public IReadOnlyList<FlagDefinition> Flags { get; init; } = Array.Empty<FlagDefinition>();
 
     [JsonPropertyName("segments")]
+    [JsonRequired]
     public IReadOnlyList<SegmentDefinition> Segments { get; init; } = Array.Empty<SegmentDefinition>();
 }
 
@@ -139,30 +141,37 @@ public sealed class FlagDefinitions
 public sealed class FlagDefinition
 {
     [JsonPropertyName("key")]
+    [JsonRequired]
     public string Key { get; init; } = string.Empty;
 
     /// <summary>Identifies the published flag version that produced this definition.</summary>
     [JsonPropertyName("sourceVersionId")]
+    [JsonRequired]
     public string SourceVersionId { get; init; } = string.Empty;
 
     /// <summary>JSON variant values keyed by variant key.</summary>
     [JsonPropertyName("variants")]
+    [JsonRequired]
     public IReadOnlyDictionary<string, JsonElement> Variants { get; init; } = new Dictionary<string, JsonElement>();
 
     /// <summary>Ordered rules. The last rule is always a fixed catch-all.</summary>
     [JsonPropertyName("rules")]
+    [JsonRequired]
     public IReadOnlyList<FlagRuleDefinition> Rules { get; init; } = Array.Empty<FlagRuleDefinition>();
 }
 
 public sealed class FlagRuleDefinition
 {
     [JsonPropertyName("id")]
+    [JsonRequired]
     public string Id { get; init; } = string.Empty;
 
     [JsonPropertyName("filter")]
+    [JsonRequired]
     public FlagFilterDefinition Filter { get; init; } = default!;
 
     [JsonPropertyName("result")]
+    [JsonRequired]
     public FlagRuleResultDefinition Result { get; init; } = default!;
 }
 
@@ -170,9 +179,11 @@ public sealed class FlagRuleDefinition
 public sealed class SegmentDefinition
 {
     [JsonPropertyName("key")]
+    [JsonRequired]
     public string Key { get; init; } = string.Empty;
 
     [JsonPropertyName("filter")]
+    [JsonRequired]
     public FlagFilterDefinition Filter { get; init; } = default!;
 }
 
@@ -189,6 +200,7 @@ public sealed class FlagVariantRuleResultDefinition : FlagRuleResultDefinition
     public override string Type => "variant";
 
     [JsonPropertyName("variantKey")]
+    [JsonRequired]
     public string VariantKey { get; init; } = string.Empty;
 }
 
@@ -199,13 +211,16 @@ public sealed class FlagPercentageDistributionRuleResultDefinition : FlagRuleRes
 
     /// <summary>The hash key (salt) for bucketing.</summary>
     [JsonPropertyName("key")]
+    [JsonRequired]
     public string Key { get; init; } = string.Empty;
 
     /// <summary>The flattened context field to bucket on, for example <c>company.id</c>.</summary>
     [JsonPropertyName("attribute")]
+    [JsonRequired]
     public string Attribute { get; init; } = string.Empty;
 
     [JsonPropertyName("allocations")]
+    [JsonRequired]
     public IReadOnlyList<FlagPercentageAllocationDefinition> Allocations { get; init; } =
         Array.Empty<FlagPercentageAllocationDefinition>();
 }
@@ -213,9 +228,11 @@ public sealed class FlagPercentageDistributionRuleResultDefinition : FlagRuleRes
 public sealed class FlagPercentageAllocationDefinition
 {
     [JsonPropertyName("percentage")]
+    [JsonRequired]
     public double Percentage { get; init; }
 
     [JsonPropertyName("destination")]
+    [JsonRequired]
     public FlagVariantDestinationDefinition Destination { get; init; } = default!;
 }
 
@@ -224,6 +241,7 @@ public sealed class FlagVariantDestinationDefinition
 {
     /// <summary><c>variant</c> or <c>nextRule</c>.</summary>
     [JsonPropertyName("type")]
+    [JsonRequired]
     public string Type { get; init; } = "variant";
 
     [JsonPropertyName("variantKey")]
@@ -243,9 +261,11 @@ public sealed class FlagFilterGroupDefinition : FlagFilterDefinition
     public override string Type => "group";
 
     [JsonPropertyName("operator")]
+    [JsonRequired]
     public string Operator { get; init; } = "and";
 
     [JsonPropertyName("filters")]
+    [JsonRequired]
     public IReadOnlyList<FlagFilterDefinition> Filters { get; init; } = Array.Empty<FlagFilterDefinition>();
 }
 
@@ -254,6 +274,7 @@ public sealed class FlagFilterNegationDefinition : FlagFilterDefinition
     public override string Type => "negation";
 
     [JsonPropertyName("filter")]
+    [JsonRequired]
     public FlagFilterDefinition Filter { get; init; } = default!;
 }
 
@@ -305,12 +326,15 @@ public sealed class FlagPercentageRolloutFilterDefinition : FlagFilterDefinition
     public override string Type => "rolloutPercentage";
 
     [JsonPropertyName("key")]
+    [JsonRequired]
     public string Key { get; init; } = string.Empty;
 
     [JsonPropertyName("partialRolloutAttribute")]
+    [JsonRequired]
     public string PartialRolloutAttribute { get; init; } = string.Empty;
 
     [JsonPropertyName("partialRolloutThreshold")]
+    [JsonRequired]
     public int PartialRolloutThreshold { get; init; }
 }
 
@@ -319,6 +343,7 @@ public sealed class FlagConstantFilterDefinition : FlagFilterDefinition
     public override string Type => "constant";
 
     [JsonPropertyName("value")]
+    [JsonRequired]
     public bool Value { get; init; }
 }
 
@@ -328,9 +353,11 @@ public sealed class FlagReferenceFilterDefinition : FlagFilterDefinition
     public override string Type => "flag";
 
     [JsonPropertyName("key")]
+    [JsonRequired]
     public string Key { get; init; } = string.Empty;
 
     [JsonPropertyName("variantKey")]
+    [JsonRequired]
     public string VariantKey { get; init; } = string.Empty;
 }
 
@@ -340,6 +367,7 @@ public sealed class SegmentReferenceFilterDefinition : FlagFilterDefinition
     public override string Type => "segment";
 
     [JsonPropertyName("key")]
+    [JsonRequired]
     public string Key { get; init; } = string.Empty;
 }
 
@@ -376,8 +404,10 @@ public sealed class FlagsFallbackSnapshot
     public string? Source { get; init; }
 
     [JsonPropertyName("flags")]
+    [JsonRequired]
     public IReadOnlyList<FlagDefinition> Flags { get; init; } = Array.Empty<FlagDefinition>();
 
     [JsonPropertyName("segments")]
+    [JsonRequired]
     public IReadOnlyList<SegmentDefinition> Segments { get; init; } = Array.Empty<SegmentDefinition>();
 }

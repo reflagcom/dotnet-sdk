@@ -22,13 +22,13 @@ internal static class ContextFlattening
         var result = new Dictionary<string, object?>(StringComparer.Ordinal);
         if (data is not null)
         {
-            Recurse(data, string.Empty, result, preserveArrays: true);
+            Recurse(data, string.Empty, result);
         }
 
         return result;
     }
 
-    private static void Recurse(object? value, string path, IDictionary<string, object?> result, bool preserveArrays)
+    private static void Recurse(object? value, string path, IDictionary<string, object?> result)
     {
         if (value is null)
         {
@@ -52,13 +52,13 @@ internal static class ContextFlattening
 
         if (value is IReadOnlyDictionary<string, object?> readOnlyDictionary)
         {
-            RecurseDictionary(readOnlyDictionary, path, result, preserveArrays);
+            RecurseDictionary(readOnlyDictionary, path, result);
             return;
         }
 
         if (value is IDictionary<string, object?> dictionary)
         {
-            RecurseDictionary(dictionary, path, result, preserveArrays);
+            RecurseDictionary(dictionary, path, result);
             return;
         }
 
@@ -75,57 +75,36 @@ internal static class ContextFlattening
                 normalized[Convert.ToString(entry.Key, CultureInfo.InvariantCulture) ?? string.Empty] = entry.Value;
             }
 
-            RecurseDictionary(normalized, path, result, preserveArrays);
+            RecurseDictionary(normalized, path, result);
             return;
         }
 
         if (value is IEnumerable enumerable and not string)
         {
-            if (preserveArrays)
-            {
-                result[path] = enumerable.Cast<object?>().Select(item => item is null
-                    ? string.Empty
-                    : ReflectionHelpers.IsScalarLike(item)
-                        ? ReflectionHelpers.ConvertToFlatString(item)
-                        : JsonSerializer.Serialize(item, ArrayElementJsonOptions)).ToArray();
-                return;
-            }
-
-            var index = 0;
-            var hadAny = false;
-            foreach (var item in enumerable)
-            {
-                hadAny = true;
-                Recurse(item, path.Length == 0 ? index.ToString(CultureInfo.InvariantCulture) : $"{path}.{index.ToString(CultureInfo.InvariantCulture)}", result, preserveArrays);
-                index++;
-            }
-
-            if (!hadAny && path.Length > 0)
-            {
-                result[path] = string.Empty;
-            }
-
+            result[path] = enumerable.Cast<object?>().Select(item => item is null
+                ? string.Empty
+                : ReflectionHelpers.IsScalarLike(item)
+                    ? ReflectionHelpers.ConvertToFlatString(item)
+                    : JsonSerializer.Serialize(item, ArrayElementJsonOptions)).ToArray();
             return;
         }
 
         RecurseDictionary(
             ReflectionHelpers.EnumerateReadableProperties(value).ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal),
             path,
-            result,
-            preserveArrays);
+            result);
     }
 
     private static void RecurseDictionary(
         IEnumerable<KeyValuePair<string, object?>> values,
         string path,
-        IDictionary<string, object?> result,
-        bool preserveArrays)
+        IDictionary<string, object?> result)
     {
         var hadAny = false;
         foreach (var (key, nestedValue) in values)
         {
             hadAny = true;
-            Recurse(nestedValue, path.Length == 0 ? key : $"{path}.{key}", result, preserveArrays);
+            Recurse(nestedValue, path.Length == 0 ? key : $"{path}.{key}", result);
         }
 
         if (!hadAny && path.Length > 0)

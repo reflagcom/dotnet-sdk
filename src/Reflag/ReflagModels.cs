@@ -45,9 +45,25 @@ public sealed class ReflagClientOptions
 
     public ReflagBatchOptions? Batch { get; init; }
 
+    /// <summary>Base Boolean overrides. Specify at most one of the four override options.</summary>
     public IReadOnlyDictionary<string, bool>? FlagOverrides { get; init; }
 
+    /// <summary>Context-dependent Boolean overrides. Specify at most one of the four override options.</summary>
     public Func<ReflagContext, IReadOnlyDictionary<string, bool>>? FlagOverridesFactory { get; init; }
+
+    /// <summary>
+    /// Base overrides with arbitrary JSON-serializable values, including Booleans and null.
+    /// Values are captured when the client is constructed and take precedence over environment overrides.
+    /// Specify at most one of the four override options.
+    /// </summary>
+    public IReadOnlyDictionary<string, object?>? JsonFlagOverrides { get; init; }
+
+    /// <summary>
+    /// JSON-valued overrides computed for each normalized evaluation context, taking precedence over
+    /// environment overrides. A null result is treated as an empty dictionary.
+    /// Specify at most one of the four override options.
+    /// </summary>
+    public Func<ReflagContext, IReadOnlyDictionary<string, object?>>? JsonFlagOverridesFactory { get; init; }
 
     public bool? Offline { get; init; }
 

@@ -39,8 +39,9 @@ public sealed class FlagsCacheTests
         await refresh22Task;
 
         Assert.Equal(new int?[] { null, 22 }, calls);
-        Assert.Equal("newest", cache.Get()!.Definitions.Flags[0].Key);
-        Assert.Equal(22, cache.GetFlagStateVersion());
+        var snapshot = cache.GetSnapshot()!;
+        Assert.Equal("newest", snapshot.Collection.Definitions.Flags[0].Key);
+        Assert.Equal(22, snapshot.FlagStateVersion);
         cache.Destroy();
     }
 
@@ -60,9 +61,36 @@ public sealed class FlagsCacheTests
         await cache.RefreshAsync(null, CancellationToken.None);
         await cache.RefreshAsync(null, CancellationToken.None);
 
-        Assert.Equal("newer", cache.Get()!.Definitions.Flags[0].Key);
-        Assert.Equal(30, cache.GetFlagStateVersion());
+        var snapshot = cache.GetSnapshot()!;
+        Assert.Equal("newer", snapshot.Collection.Definitions.Flags[0].Key);
+        Assert.Equal(30, snapshot.FlagStateVersion);
         cache.Destroy();
+    }
+
+    [Theory]
+    [InlineData(null, null, true)]
+    [InlineData(null, 1, true)]
+    [InlineData(1, null, false)]
+    [InlineData(1, 1, true)]
+    [InlineData(2, 1, false)]
+    [InlineData(1, 2, true)]
+    public async Task RefreshAsync_preserves_version_ordering_for_live_and_unversioned_snapshots(int? currentVersion, int? nextVersion, bool replace)
+    {
+        var current = new FlagsCacheRefreshResult(CreateCollection("current"), currentVersion);
+        var next = new FlagsCacheRefreshResult(CreateCollection("next"), nextVersion);
+        var responses = new Queue<FlagsCacheRefreshResult?>([current, next]);
+        var cache = new FlagsCache(_ => Task.FromResult(responses.Dequeue()), minRefreshInterval: TimeSpan.Zero);
+        try
+        {
+            await cache.RefreshAsync(null, CancellationToken.None);
+            await cache.RefreshAsync(null, CancellationToken.None);
+
+            Assert.Same(replace ? next : current, cache.GetSnapshot());
+        }
+        finally
+        {
+            cache.Destroy();
+        }
     }
 
     [Fact]
@@ -100,21 +128,64 @@ public sealed class FlagsCacheTests
 
         firstFetch.SetResult(new FlagsCacheRefreshResult(CreateCollection("first"), 1));
 
-        var completed = await Task.WhenAny(firstRefreshTask, Task.Delay(TimeSpan.FromSeconds(1)));
-        Assert.Same(firstRefreshTask, completed);
-        Assert.True(firstRefreshTask.IsCompletedSuccessfully);
+        await firstRefreshTask.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(secondRefreshTask.IsCompleted);
 
-        var secondFetchStartedCompleted = await Task.WhenAny(secondFetchStarted.Task, Task.Delay(TimeSpan.FromSeconds(1)));
-        Assert.Same(secondFetchStarted.Task, secondFetchStartedCompleted);
+        await secondFetchStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(secondRefreshTask.IsCompleted);
 
         secondFetch.SetResult(new FlagsCacheRefreshResult(CreateCollection("second"), 2));
         await secondRefreshTask;
 
         Assert.Equal(new int?[] { null, null }, calls);
-        Assert.Equal("second", cache.Get()!.Definitions.Flags[0].Key);
+        Assert.Equal("second", cache.GetSnapshot()!.Collection.Definitions.Flags[0].Key);
         cache.Destroy();
+    }
+
+    [Fact]
+    public async Task GetSnapshot_keeps_definitions_and_version_paired_during_refreshes()
+    {
+        var version = 0;
+        var cache = new FlagsCache(_ =>
+        {
+            version++;
+            return Task.FromResult<FlagsCacheRefreshResult?>(new FlagsCacheRefreshResult(CreateCollection($"version-{version}"), version));
+        }, minRefreshInterval: TimeSpan.Zero);
+        try
+        {
+            Assert.Null(cache.GetSnapshot());
+            await cache.RefreshAsync(null, CancellationToken.None);
+            var original = cache.GetSnapshot()!;
+            var mismatches = 0;
+            var refreshes = Task.Run(async () =>
+            {
+                for (var index = 0; index < 500; index++)
+                {
+                    await cache.RefreshAsync(null, CancellationToken.None);
+                }
+            });
+            do
+            {
+                var snapshot = cache.GetSnapshot()!;
+                if (snapshot.Collection.Definitions.Flags[0].Key != $"version-{snapshot.FlagStateVersion}")
+                {
+                    mismatches++;
+                }
+            }
+            while (!refreshes.IsCompleted);
+
+            await refreshes;
+            Assert.Equal(0, mismatches);
+            Assert.Equal("version-1", original.Collection.Definitions.Flags[0].Key);
+            Assert.Equal(1, original.FlagStateVersion);
+            Assert.Equal(501, cache.GetSnapshot()!.FlagStateVersion);
+        }
+        finally
+        {
+            cache.Destroy();
+        }
+
+        Assert.Null(cache.GetSnapshot());
     }
 
     private static PreparedFlagCollection CreateCollection(string key)

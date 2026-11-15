@@ -84,6 +84,10 @@ public sealed class ReflagClient : IAsyncDisposable
         var flagsPushUrl = ResolveFlagsPushUrl(options.FlagsPushUrl);
         _logger = options.Logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 
+        // Normalize startup values before creating owned transport resources; serialization can fail.
+        _baseFlagOverrides = BuildBaseFlagOverrides(envConfig.FlagOverrides, options);
+        _effectiveFlagOverrides = _baseFlagOverrides;
+
         _transport = new HttpClientTransport(options.HttpClient, ownsHttpClient: options.HttpClient is null);
 
         _flagsFallbackProviderContext = new FlagsFallbackProviderContext
@@ -111,9 +115,6 @@ public sealed class ReflagClient : IAsyncDisposable
             syncMode,
             flagsPushUrl,
             options.FlagsFallbackProvider);
-
-        _baseFlagOverrides = BuildBaseFlagOverrides(envConfig.FlagOverrides, options.FlagOverrides, options.FlagOverridesFactory);
-        _effectiveFlagOverrides = _baseFlagOverrides;
 
         _rateLimiter = new RateLimiter(ReflagConstants.FlagEventRateLimiterWindow);
         _batchBuffer = new BatchBuffer<BulkItem>(SendBulkItemsAsync, _logger, batchMaxSize, batchInterval);
@@ -167,7 +168,7 @@ public sealed class ReflagClient : IAsyncDisposable
     {
         EnsureNotDisposed();
         _flagsSyncController.OnAccess();
-        return _flagsCache.Get()?.Definitions ?? new FlagDefinitions();
+        return _flagsCache.GetSnapshot()?.Collection.Definitions ?? new FlagDefinitions();
     }
 
     /// <summary>
@@ -609,7 +610,7 @@ public sealed class ReflagClient : IAsyncDisposable
     {
         lock (_overridesGate)
         {
-            _baseFlagOverrides = NormalizeFlagOverrides(overridesFactory);
+            _baseFlagOverrides = overridesFactory;
             SyncFlagOverridesNoLock();
         }
     }
@@ -619,7 +620,7 @@ public sealed class ReflagClient : IAsyncDisposable
         FlagOverrideLayer layer;
         lock (_overridesGate)
         {
-            layer = new FlagOverrideLayer(_nextFlagOverrideLayerId++, NormalizeFlagOverrides(overridesFactory));
+            layer = new FlagOverrideLayer(_nextFlagOverrideLayerId++, overridesFactory);
             _flagOverrideLayers.Add(layer);
             SyncFlagOverridesNoLock();
         }
@@ -676,7 +677,7 @@ public sealed class ReflagClient : IAsyncDisposable
         _initializationFinished = true;
     }
 
-    private PreparedFlagCollection? GetCollectionForLocalEvaluation()
+    private FlagsCacheRefreshResult? GetSnapshotForLocalEvaluation()
     {
         if (_config.Offline)
         {
@@ -684,13 +685,13 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _flagsSyncController.OnAccess();
-        var collection = _flagsCache.Get();
-        if (collection is null)
+        var snapshot = _flagsCache.GetSnapshot();
+        if (snapshot is null)
         {
             _logger.LogWarning("no flag definitions available, using flag overrides only.");
         }
 
-        return collection;
+        return snapshot;
     }
 
     private FlagsEvaluation EvaluateFlags(
@@ -705,8 +706,8 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _ = SyncContextAsync(context, telemetryOptions);
-        var collection = GetCollectionForLocalEvaluation();
-        var flagStateVersion = _flagsCache.GetFlagStateVersion();
+        var snapshot = GetSnapshotForLocalEvaluation();
+        var collection = snapshot?.Collection;
         var flags = new Dictionary<string, RawReflagFlag>(StringComparer.Ordinal);
         if (collection is not null)
         {
@@ -733,7 +734,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         // Overrides apply after evaluation; they do not change the results of dependent flags.
-        foreach (var (flagKey, value) in GetFlagOverrides(context))
+        foreach (var (flagKey, value) in _effectiveFlagOverrides(context))
         {
             if (key is null || string.Equals(key, flagKey, StringComparison.Ordinal))
             {
@@ -746,7 +747,7 @@ public sealed class ReflagClient : IAsyncDisposable
             flags[key] = LocalResult(key, null);
         }
 
-        return new FlagsEvaluation(flags, flagStateVersion, evaluatedBeforeInitialization);
+        return new FlagsEvaluation(flags, snapshot?.FlagStateVersion, evaluatedBeforeInitialization);
     }
 
     private static RawReflagFlag LocalResult(string key, JsonElement? value)
@@ -757,11 +758,6 @@ public sealed class ReflagClient : IAsyncDisposable
             Resolved = false,
             Value = value,
         };
-    }
-
-    private IReadOnlyDictionary<string, JsonElement> GetFlagOverrides(ReflagContext context)
-    {
-        return _effectiveFlagOverrides(context) ?? EmptyOverrides;
     }
 
     private async Task<FlagsCacheRefreshResult?> FetchDefinitionsAsync(int? waitForVersion)
@@ -780,7 +776,7 @@ public sealed class ReflagClient : IAsyncDisposable
                     DeserializeCollectionPart<SegmentDefinition>(response.Segments));
                 _canLoadFlagsFallbackProvider = false;
                 var flagStateVersion = response.FlagStateVersion.Value;
-                if (flagStateVersion < (_flagsCache.GetFlagStateVersion() ?? -1))
+                if (flagStateVersion < (_flagsCache.GetSnapshot()?.FlagStateVersion ?? -1))
                 {
                     return null;
                 }
@@ -909,7 +905,8 @@ public sealed class ReflagClient : IAsyncDisposable
                 snapshot.Flags is null ||
                 snapshot.Segments is null ||
                 snapshot.FlagStateVersion is < 0 ||
-                snapshot.Source is not (null or "static"))
+                snapshot.Source is not (null or "static") ||
+                (snapshot.Source == "static" && snapshot.FlagStateVersion is not null))
             {
                 // Schema version 1 snapshots cannot be evaluated by the collection evaluator.
                 _logger.LogWarning("flagsFallbackProvider: invalid or unsupported snapshot returned");
@@ -1188,7 +1185,7 @@ public sealed class ReflagClient : IAsyncDisposable
             var merged = CollectionHelpers.ToDictionary(_baseFlagOverrides(context), StringComparer.Ordinal);
             foreach (var layer in layers)
             {
-                foreach (var (key, value) in layer(context) ?? EmptyOverrides)
+                foreach (var (key, value) in layer(context))
                 {
                     merged[key] = value;
                 }
@@ -1251,34 +1248,28 @@ public sealed class ReflagClient : IAsyncDisposable
 
     private static Func<ReflagContext, IReadOnlyDictionary<string, JsonElement>> BuildBaseFlagOverrides(
         IReadOnlyDictionary<string, bool> envOverrides,
-        IReadOnlyDictionary<string, bool>? optionOverrides,
-        Func<ReflagContext, IReadOnlyDictionary<string, bool>>? optionOverridesFactory)
+        ReflagClientOptions options)
     {
         var normalizedEnvOverrides = FlagValueConversion.ToJsonOverrides(envOverrides);
-        if (optionOverridesFactory is not null)
+        var factory = options switch
         {
-            var normalizedFactory = FlagValueConversion.ToJsonOverridesFactory(optionOverridesFactory);
-            return context => MergeOverrides(normalizedEnvOverrides, normalizedFactory(context));
+            { FlagOverridesFactory: { } booleanFactory } => FlagValueConversion.ToJsonOverridesFactory(booleanFactory),
+            { JsonFlagOverridesFactory: { } jsonFactory } => FlagValueConversion.ToJsonOverridesFactory(jsonFactory),
+            _ => null,
+        };
+        if (factory is not null)
+        {
+            return context => MergeOverrides(normalizedEnvOverrides, factory(context));
         }
 
-        if (optionOverrides is not null)
+        var configuredOverrides = options switch
         {
-            var normalizedOverrides = MergeOverrides(normalizedEnvOverrides, FlagValueConversion.ToJsonOverrides(optionOverrides));
-            return _ => normalizedOverrides;
-        }
-
-        if (normalizedEnvOverrides.Count == 0)
-        {
-            return static _ => EmptyOverrides;
-        }
-
-        return _ => normalizedEnvOverrides;
-    }
-
-    private static Func<ReflagContext, IReadOnlyDictionary<string, JsonElement>> NormalizeFlagOverrides(
-        Func<ReflagContext, IReadOnlyDictionary<string, JsonElement>> factory)
-    {
-        return context => factory(context) ?? EmptyOverrides;
+            { FlagOverrides: { } booleanOverrides } => FlagValueConversion.ToJsonOverrides(booleanOverrides),
+            { JsonFlagOverrides: { } jsonOverrides } => FlagValueConversion.ToJsonOverrides(jsonOverrides),
+            _ => EmptyOverrides,
+        };
+        var merged = MergeOverrides(normalizedEnvOverrides, configuredOverrides);
+        return _ => merged;
     }
 
     private static IReadOnlyDictionary<string, JsonElement> MergeOverrides(
@@ -1338,9 +1329,16 @@ public sealed class ReflagClient : IAsyncDisposable
             throw new ArgumentException("options.FlagsPushUrl must be an absolute URI.", nameof(options));
         }
 
-        if (options.FlagOverrides is not null && options.FlagOverridesFactory is not null)
+        var overrideSources =
+            (options.FlagOverrides is not null ? 1 : 0) +
+            (options.FlagOverridesFactory is not null ? 1 : 0) +
+            (options.JsonFlagOverrides is not null ? 1 : 0) +
+            (options.JsonFlagOverridesFactory is not null ? 1 : 0);
+        if (overrideSources > 1)
         {
-            throw new ArgumentException("Specify either FlagOverrides or FlagOverridesFactory, but not both.", nameof(options));
+            throw new ArgumentException(
+                "Specify at most one of FlagOverrides, FlagOverridesFactory, JsonFlagOverrides, or JsonFlagOverridesFactory.",
+                nameof(options));
         }
     }
 

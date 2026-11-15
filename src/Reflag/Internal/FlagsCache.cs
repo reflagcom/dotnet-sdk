@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 namespace Reflag.Internal;
 
 internal sealed record FlagsCacheRefreshResult(
-    PreparedFlagCollection Definitions,
+    PreparedFlagCollection Collection,
     int? FlagStateVersion);
 
 internal sealed class FlagsCache
@@ -16,10 +16,8 @@ internal sealed class FlagsCache
 
     private readonly List<RefreshWaiter> _waiters = [];
 
-    private PreparedFlagCollection? _value;
-    private int? _flagStateVersion;
+    private FlagsCacheRefreshResult? _snapshot;
     private Task? _drainTask;
-    private DateTimeOffset? _lastRefreshAt;
     private DateTimeOffset? _lastRefreshStartedAt;
     private bool _destroyed;
     private bool _pendingFullRefresh;
@@ -38,43 +36,23 @@ internal sealed class FlagsCache
         _minRefreshInterval = minRefreshInterval ?? ReflagConstants.MinRefreshInterval;
     }
 
-    public PreparedFlagCollection? Get()
+    /// <summary>Captures definitions and their version together so a read cannot mix refreshes.</summary>
+    public FlagsCacheRefreshResult? GetSnapshot()
     {
         lock (_gate)
         {
-            return _value;
+            return _snapshot;
         }
     }
 
-    public DateTimeOffset? GetLastRefreshAt()
-    {
-        lock (_gate)
-        {
-            return _lastRefreshAt;
-        }
-    }
-
-    public int? GetFlagStateVersion()
-    {
-        lock (_gate)
-        {
-            return _flagStateVersion;
-        }
-    }
-
-    public async Task<PreparedFlagCollection?> RefreshAsync(int? waitForVersion, CancellationToken cancellationToken)
+    public async Task RefreshAsync(int? waitForVersion, CancellationToken cancellationToken)
     {
         Task? waiterTask;
         lock (_gate)
         {
-            if (_destroyed)
+            if (_destroyed || (waitForVersion is not null && _snapshot?.FlagStateVersion >= waitForVersion))
             {
-                return _value;
-            }
-
-            if (waitForVersion is not null && _flagStateVersion is not null && _flagStateVersion >= waitForVersion)
-            {
-                return _value;
+                return;
             }
 
             QueueRefreshNoLock(waitForVersion);
@@ -86,11 +64,6 @@ internal sealed class FlagsCache
         if (waiterTask is not null)
         {
             await AsyncHelpers.WaitAsync(waiterTask, cancellationToken).ConfigureAwait(false);
-        }
-
-        lock (_gate)
-        {
-            return _value;
         }
     }
 
@@ -128,12 +101,10 @@ internal sealed class FlagsCache
             }
 
             _destroyed = true;
-            _value = null;
-            _flagStateVersion = null;
+            _snapshot = null;
             _drainTask = null;
             _pendingFullRefresh = false;
             _pendingWaitForVersion = null;
-            _lastRefreshAt = null;
             _lastRefreshStartedAt = null;
             _activeRefreshTicket = null;
             _pendingRefreshTicket = null;
@@ -152,7 +123,7 @@ internal sealed class FlagsCache
     {
         if (waitForVersion is not null)
         {
-            if (_flagStateVersion is not null && _flagStateVersion >= waitForVersion)
+            if (_snapshot?.FlagStateVersion >= waitForVersion)
             {
                 return;
             }
@@ -227,12 +198,8 @@ internal sealed class FlagsCache
 
     private bool ShouldApplyRefreshResultNoLock(int? flagStateVersion)
     {
-        if (flagStateVersion is null)
-        {
-            return _flagStateVersion is null;
-        }
-
-        return _flagStateVersion is null || flagStateVersion >= _flagStateVersion;
+        var currentVersion = _snapshot?.FlagStateVersion;
+        return currentVersion is null || flagStateVersion >= currentVersion;
     }
 
     private void ClearSatisfiedPendingVersionNoLock(int? seenFlagStateVersion)
@@ -242,7 +209,7 @@ internal sealed class FlagsCache
             return;
         }
 
-        var latestKnownVersion = Math.Max(_flagStateVersion ?? -1, seenFlagStateVersion ?? -1);
+        var latestKnownVersion = Math.Max(_snapshot?.FlagStateVersion ?? -1, seenFlagStateVersion ?? -1);
         if (latestKnownVersion >= _pendingWaitForVersion)
         {
             _pendingWaitForVersion = null;
@@ -379,7 +346,6 @@ internal sealed class FlagsCache
             return;
         }
 
-        var applied = false;
         lock (_gate)
         {
             if (_destroyed)
@@ -393,16 +359,10 @@ internal sealed class FlagsCache
                 return;
             }
 
-            _value = result.Definitions;
-            _flagStateVersion = result.FlagStateVersion;
-            _lastRefreshAt = DateTimeOffset.UtcNow;
-            applied = true;
+            _snapshot = result;
         }
 
-        if (applied)
-        {
-            _logger.LogInformation("refreshed flag definitions");
-        }
+        _logger.LogInformation("refreshed flag definitions");
     }
 
     private readonly record struct RefreshRequest(int? WaitForVersion);

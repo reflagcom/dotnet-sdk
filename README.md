@@ -311,11 +311,16 @@ Constructor options currently available:
 | `FetchTimeout` | `TimeSpan?` | Default `10s` | - |
 | `FlagsFetchRetries` | `int?` | Default `3` | - |
 | `Batch` | `ReflagBatchOptions?` | Max size, interval, shutdown flush | - |
-| `FlagOverrides` | `IReadOnlyDictionary<string, bool>?` | Base local overrides. Use `SetFlagOverrides(...)` for JSON values | `REFLAG_FLAGS_ENABLED`, `REFLAG_FLAGS_DISABLED` |
-| `FlagOverridesFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, bool>>?` | Context-dependent base overrides | - |
+| `FlagOverrides` | `IReadOnlyDictionary<string, bool>?` | Base Boolean overrides | `REFLAG_FLAGS_ENABLED`, `REFLAG_FLAGS_DISABLED` |
+| `FlagOverridesFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, bool>>?` | Context-dependent Boolean overrides | - |
+| `JsonFlagOverrides` | `IReadOnlyDictionary<string, object?>?` | Base JSON-valued overrides, captured at construction | - |
+| `JsonFlagOverridesFactory` | `Func<ReflagContext, IReadOnlyDictionary<string, object?>>?` | JSON-valued overrides computed per normalized context | - |
 | `Offline` | `bool?` | Disables network I/O | `REFLAG_OFFLINE` |
 | `FlagsSyncMode` | `ReflagFlagsSyncMode?` | Default is `Push` | - |
 | `FlagsPushUrl` | `Uri?` | Override the push-sync SSE endpoint (`/sse/server`) | - |
+
+Specify at most one of `FlagOverrides`, `FlagOverridesFactory`, `JsonFlagOverrides`, or `JsonFlagOverridesFactory`.
+Constructor overrides take precedence over environment overrides. JSON override dictionaries can contain Boolean values too.
 
 ## Testing with flag overrides
 
@@ -400,6 +405,23 @@ using (client.PushFlagOverrides(context => new Dictionary<string, bool>
 ```
 
 ### JSON overrides for multivariate flags
+
+Set JSON-valued overrides at construction with `JsonFlagOverrides`, including when registering the client with dependency injection:
+
+```csharp
+builder.Services.AddReflag(new ReflagClientOptions
+{
+    JsonFlagOverrides = new Dictionary<string, object?>
+    {
+        ["model"] = new { name = "large", maxTokens = 8000 },
+        ["demo-flag"] = true,
+    },
+});
+```
+
+For context-dependent startup values, use `JsonFlagOverridesFactory`, a function from `ReflagContext` to `IReadOnlyDictionary<string, object?>`. It runs on each evaluation against the normalized context; a null result is treated as an empty dictionary. Static `JsonFlagOverrides` values are serialized and detached at construction, so later mutations to the input do not change them.
+
+`SetFlagOverrides(...)` replaces the entire base layer, including constructor and environment overrides. `ClearFlagOverrides()` clears that base layer; neither operation removes active temporary layers.
 
 `SetFlagOverrides(...)` and `PushFlagOverrides(...)` also accept `IReadOnlyDictionary<string, object?>` (or a function returning one) for JSON values:
 

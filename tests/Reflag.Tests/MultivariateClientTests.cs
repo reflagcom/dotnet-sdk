@@ -224,6 +224,68 @@ public sealed class MultivariateClientTests
         Assert.False(check.TryGetProperty("sourceVersionId", out _));
     }
 
+    [Theory]
+    [InlineData("{\"type\":\"negation\",\"filter\":{\"type\":\"constant\"}}")]
+    [InlineData("{\"type\":\"group\",\"operator\":\"and\"}")]
+    [InlineData("{\"type\":\"group\",\"filters\":[]}")]
+    [InlineData("{\"type\":\"negation\",\"filter\":{\"type\":\"rolloutPercentage\",\"key\":\"split\",\"partialRolloutAttribute\":\"company.id\"}}")]
+    public async Task Malformed_refresh_retains_the_accepted_collection_and_does_not_save_it(string filter)
+    {
+        var transport = new TestTransport();
+        var fallback = new FixedFallbackProvider(new FlagsFallbackSnapshot());
+        transport.EnqueueGetJson(TestDefinitions.FlagsResponse(5, ModelFlag()));
+        await using var client = new ReflagClient(Options(transport, new TestLogger(), fallback));
+        await client.InitializeAsync();
+        await client.FlushAsync();
+        var malformed = JsonNode.Parse(TestDefinitions.FlagsResponse(6, ModelFlag()))!;
+        malformed["flags"]![0]!["rules"]![0]!["filter"] = JsonNode.Parse(filter);
+        transport.EnqueueGetJson(malformed.ToJsonString());
+
+        await client.RefreshFlagsAsync();
+        await client.FlushAsync();
+
+        var bootstrap = client.GetFlagsForBootstrap(new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false });
+        Assert.Equal(5, bootstrap.FlagStateVersion);
+        Assert.Equal("cheap", bootstrap.Flags["model"].VariantKey);
+        Assert.Equal("small", client.GetFlag("model", new ReflagContext(), new ModelConfig("fallback", 0)).Name);
+        Assert.Equal(5, Assert.Single(fallback.Saved).FlagStateVersion);
+        Assert.Equal(2, transport.GetCalls.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(100)]
+    public async Task Static_fallback_with_a_live_version_is_rejected_without_blocking_live_recovery(int version)
+    {
+        var transport = new TestTransport();
+        var logger = new TestLogger();
+        transport.EnqueueGetFailure(new HttpRequestException("offline"));
+        await using var client = new ReflagClient(Options(transport, logger, new FixedFallbackProvider(new FlagsFallbackSnapshot
+        {
+            SchemaVersion = FlagsFallbackSnapshot.CurrentSchemaVersion,
+            Source = "static",
+            FlagStateVersion = version,
+            SavedAt = DateTimeOffset.UtcNow,
+            Flags = [ModelFlag()],
+        })));
+        await client.InitializeAsync();
+
+        Assert.Empty(client.GetFlagDefinitions().Flags);
+        Assert.Null(client.GetFlagsForBootstrap(Enterprise).FlagStateVersion);
+        Assert.Contains(logger.Entries, entry => entry.Message.Contains("invalid or unsupported snapshot", StringComparison.Ordinal));
+
+        transport.EnqueueGetJson(TestDefinitions.FlagsResponse(2, ModelFlag()));
+        await client.RefreshFlagsAsync();
+
+        var bootstrap = client.GetFlagsForBootstrap(Enterprise);
+        Assert.Equal(2, bootstrap.FlagStateVersion);
+        Assert.True(bootstrap.Flags["model"].Resolved);
+        Assert.Equal("quality", bootstrap.Flags["model"].VariantKey);
+        Assert.Equal("large", client.GetFlag("model", Enterprise, new ModelConfig("fallback", 0)).Name);
+        await client.FlushAsync();
+        Assert.Equal(2, Assert.Single(ChecksFor(transport, "model")).GetProperty("flagStateVersion").GetInt32());
+    }
+
     [Fact]
     public async Task Unsupported_protocol_versions_are_rejected()
     {
@@ -269,10 +331,15 @@ public sealed class MultivariateClientTests
 
     private sealed class FixedFallbackProvider(FlagsFallbackSnapshot snapshot) : IFlagsFallbackProvider
     {
+        public List<FlagsFallbackSnapshot> Saved { get; } = new();
+
         public Task<FlagsFallbackSnapshot?> LoadAsync(FlagsFallbackProviderContext context, CancellationToken cancellationToken = default) =>
             Task.FromResult<FlagsFallbackSnapshot?>(snapshot);
 
-        public Task SaveAsync(FlagsFallbackProviderContext context, FlagsFallbackSnapshot snapshot, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task SaveAsync(FlagsFallbackProviderContext context, FlagsFallbackSnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            Saved.Add(snapshot);
+            return Task.CompletedTask;
+        }
     }
 }
