@@ -676,6 +676,15 @@ var bound = client.BindClient(
     });
 ```
 
+## Upgrading from 0.2.x to 0.3.0
+
+Version 0.3.0 requires protocol-v2 flag definitions and changes these lower-level APIs and formats:
+
+- **Definitions:** `GetFlagDefinitions()` now returns a collection with `.Flags` and `.Segments`. Use `.Flags` when enumerating flags; retain both when passing on the complete graph. Definitions use variants and rules instead of `Targeting`; the old `FlagTargetingDefinition` and `FlagTargetingRuleDefinition` types are removed.
+- **Raw results:** `RawReflagFlag.Key` becomes `FlagKey`, and `Value` changes from `bool` to `JsonElement?`. Selection metadata now uses `VariantKey` and `SourceVersionId` instead of `TargetingVersion`. Prefer `GetFlag(...)` or `GetFlag<T>(..., defaultValue)` for application reads.
+- **Bootstrap:** `GetFlagsForBootstrap(...)` produces protocol-v2 JSON. Upgrade browser/framework bootstrap consumers to a compatible v2 SDK alongside the server.
+- **Fallback snapshots:** schema-1 snapshots are ignored, and built-in providers use new v2 storage keys. Populate the new cache through a successful live fetch before relying on outage startup; keep old snapshots for rollback. Custom providers must preserve the complete schema-2 snapshot, including segments.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
