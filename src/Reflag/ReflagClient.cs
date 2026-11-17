@@ -1149,6 +1149,7 @@ public sealed class ReflagClient : IAsyncDisposable
             ["evalRuleResults"] = string.Join(",", ruleResults.Select(matched => matched ? "1" : "0")),
             ["evalErrors"] = JsonSerializer.Serialize(errors, ReflagJson.Options),
             ["contextKey"] = BuildContextKey(evaluationContext),
+            ["evaluatedBeforeInitialization"] = evaluatedBeforeInitialization,
         });
 
         if (!_rateLimiter.IsAllowed(dedupeKey))
