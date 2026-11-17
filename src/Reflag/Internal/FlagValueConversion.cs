@@ -1,10 +1,16 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Reflag.Internal;
 
 internal static class FlagValueConversion
 {
+    private static readonly JsonSerializerOptions ValueJsonOptions = new(ReflagJson.Options)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+    };
+
     /// <summary>
     /// Converts a flag's JSON value to <typeparamref name="T" />. Arbitrary-JSON types accept any value,
     /// including JSON null; other types reject null and values of a different JSON category.
@@ -58,7 +64,7 @@ internal static class FlagValueConversion
         {
             result[pair.Key] = pair.Value is JsonElement element
                 ? element.Clone()
-                : JsonSerializer.SerializeToElement(pair.Value, ReflagJson.Options);
+                : JsonSerializer.SerializeToElement(pair.Value, ValueJsonOptions);
         }
 
         return result;
