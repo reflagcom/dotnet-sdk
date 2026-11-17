@@ -9,56 +9,64 @@ namespace Reflag.Tests;
 
 public sealed class ReflagEndToEndTests
 {
+    // Shaped like GET /flags from ingest: Boolean and multivariate flags, a segment, a flag reference and
+    // a percentage distribution keyed on the company.
+    private const string FlagsWireResponse = """
+        {
+          "success": true,
+          "protocolVersion": 2,
+          "flagStateVersion": 123,
+          "flags": [
+            {
+              "key": "new-dashboard",
+              "sourceVersionId": "fv-dashboard",
+              "variants": { "true": true, "false": false },
+              "rules": [
+                { "id": "company-targets", "filter": { "type": "context", "field": "company.id", "operator": "ANY_OF", "values": ["company-456"] }, "result": { "type": "variant", "variantKey": "true" } },
+                { "id": "default", "filter": { "type": "constant", "value": true }, "result": { "type": "variant", "variantKey": "false" } }
+              ]
+            },
+            {
+              "key": "model",
+              "sourceVersionId": "fv-model",
+              "variants": {
+                "quality": { "name": "large", "maxTokens": 8000 },
+                "cheap": { "name": "small", "maxTokens": 1000 }
+              },
+              "rules": [
+                { "id": "enterprise", "filter": { "type": "segment", "key": "enterprise" }, "result": { "type": "variant", "variantKey": "quality" } },
+                { "id": "split", "filter": { "type": "constant", "value": true }, "result": { "type": "percentageDistribution", "key": "[\"model\",\"split\"]", "attribute": "company.id", "allocations": [ { "percentage": 0, "destination": { "type": "variant", "variantKey": "quality" } }, { "percentage": 100, "destination": { "type": "variant", "variantKey": "cheap" } } ] } },
+                { "id": "default", "filter": { "type": "constant", "value": true }, "result": { "type": "variant", "variantKey": "cheap" } }
+              ]
+            },
+            {
+              "key": "quality-banner",
+              "sourceVersionId": "fv-banner",
+              "variants": { "true": true, "false": false },
+              "rules": [
+                { "id": "uses-quality", "filter": { "type": "flag", "key": "model", "variantKey": "quality" }, "result": { "type": "variant", "variantKey": "true" } },
+                { "id": "default", "filter": { "type": "constant", "value": true }, "result": { "type": "variant", "variantKey": "false" } }
+              ]
+            }
+          ],
+          "segments": [
+            { "key": "enterprise", "filter": { "type": "context", "field": "company.plan", "operator": "IS", "values": ["enterprise"] } }
+          ]
+        }
+        """;
+
+    private sealed record ModelConfig(string Name, int MaxTokens);
+
     [Fact]
-    public async Task InitializeAsync_over_real_http_server_uses_wire_targeting_version_and_expected_local_evaluation()
+    public async Task InitializeAsync_over_real_http_server_evaluates_protocol_v2_collection_locally()
     {
         await using var server = await LoopbackJsonServer.StartAsync(request =>
         {
             Assert.Equal("GET", request.Method);
-            Assert.Equal("/api/features", request.Path);
+            Assert.Equal("/api/flags", request.Path);
             Assert.Equal("Bearer validSecretKeyWithMoreThan22Chars", request.Headers["Authorization"]);
             Assert.True(request.Headers.ContainsKey("reflag-sdk-version"));
-
-            return LoopbackJsonResponse.Json(new
-            {
-                success = true,
-                flagStateVersion = 123,
-                features = new object[]
-                {
-                    new
-                    {
-                        key = "new-dashboard",
-                        description = "Roll out the new dashboard",
-                        targeting = new
-                        {
-                            version = 7,
-                            rules = new object[]
-                            {
-                                new
-                                {
-                                    filter = new
-                                    {
-                                        type = "context",
-                                        field = "company.id",
-                                        @operator = "IS",
-                                        values = new[] { "company-456" },
-                                    },
-                                    value = true,
-                                },
-                                new
-                                {
-                                    filter = new
-                                    {
-                                        type = "constant",
-                                        value = true,
-                                    },
-                                    value = false,
-                                },
-                            },
-                        },
-                    },
-                },
-            });
+            return LoopbackJsonResponse.Raw(FlagsWireResponse);
         }, basePath: "/api/");
 
         await using var client = new ReflagClient(new ReflagClientOptions
@@ -66,167 +74,88 @@ public sealed class ReflagEndToEndTests
             SecretKey = "validSecretKeyWithMoreThan22Chars",
             ApiBaseUrl = server.BaseUri,
             FlagsFetchRetries = 0,
-            Batch = new ReflagBatchOptions
-            {
-                FlushOnExit = false,
-            },
+            Batch = new ReflagBatchOptions { FlushOnExit = false },
         });
 
         await client.InitializeAsync();
 
-        var matchingContext = new ReflagContext
-        {
-            Company = new ReflagCompanyContext
-            {
-                Id = "company-456",
-            },
-        };
+        var enterprise = ReflagContext.From(new { Company = new { Id = "company-456", plan = "enterprise" } });
+        var free = ReflagContext.From(new { Company = new { Id = "company-999", plan = "free" } });
+        var fallbackModel = new ModelConfig("fallback", 1);
 
-        var nonMatchingContext = new ReflagContext
-        {
-            Company = new ReflagCompanyContext
-            {
-                Id = "company-999",
-            },
-        };
+        Assert.True(client.GetFlag("new-dashboard", enterprise));
+        Assert.False(client.GetFlag("new-dashboard", free));
+        Assert.Equal(new ModelConfig("large", 8000), client.GetFlag("model", enterprise, fallbackModel));
+        Assert.Equal(new ModelConfig("small", 1000), client.GetFlag("model", free, fallbackModel));
+        Assert.True(client.GetFlag("quality-banner", enterprise));
+        Assert.False(client.GetFlag("quality-banner", free));
 
-        var enabled = client.GetFlag("new-dashboard", matchingContext);
-        var disabled = client.GetFlag("new-dashboard", nonMatchingContext);
-        var bootstrapped = client.GetFlagsForBootstrap(matchingContext);
+        // Category mismatches and missing flags use the default.
+        Assert.Equal("fallback", client.GetFlag("model", enterprise, "fallback"));
+        Assert.False(client.GetFlag("model", enterprise));
+        Assert.Equal(fallbackModel, client.GetFlag("missing", enterprise, fallbackModel));
+
+        var values = client.GetFlags(free);
+        Assert.Equal(new[] { "new-dashboard", "model", "quality-banner" }, values.Keys);
+        Assert.Equal("small", values["model"]!.Value.GetProperty("name").GetString());
+
         var definitions = client.GetFlagDefinitions();
-
-        Assert.True(enabled);
-        Assert.False(disabled);
-
-        Assert.Equal(123, bootstrapped.FlagStateVersion);
-
-        var bootstrappedFlag = bootstrapped.Flags["new-dashboard"];
-        Assert.True(bootstrappedFlag.Value);
-        Assert.Equal(7, bootstrappedFlag.TargetingVersion);
-        Assert.Equal(new[] { true, true }, bootstrappedFlag.RuleEvaluationResults);
-        Assert.Empty(bootstrappedFlag.MissingContextFields ?? Array.Empty<string>());
-
-        Assert.Single(definitions);
-        Assert.Equal("new-dashboard", definitions[0].Key);
-        Assert.Equal(7, definitions[0].Targeting.Version);
-
+        Assert.Equal(new[] { "new-dashboard", "model", "quality-banner" }, definitions.Flags.Select(flag => flag.Key));
+        Assert.Equal("enterprise", Assert.Single(definitions.Segments).Key);
         Assert.Single(server.Requests);
     }
 
     [Fact]
-    public async Task InitializeAsync_over_real_http_server_supports_backend_boolean_rule_shape_without_rule_value()
+    public async Task GetFlagsForBootstrap_serializes_protocol_v2_payload()
     {
-        await using var server = await LoopbackJsonServer.StartAsync(_ =>
-            LoopbackJsonResponse.Json(new
-            {
-                success = true,
-                flagStateVersion = 2,
-                features = new object[]
-                {
-                    new
-                    {
-                        key = "f-1",
-                        description = (string?)null,
-                        stage = "In development",
-                        targeting = new
-                        {
-                            version = 2,
-                            rules = new object[]
-                            {
-                                new
-                                {
-                                    filter = new
-                                    {
-                                        type = "group",
-                                        @operator = "and",
-                                        filters = new object[]
-                                        {
-                                            new
-                                            {
-                                                type = "context",
-                                                field = "company.id",
-                                                @operator = "ANY_OF",
-                                                values = new[] { "company-456" },
-                                            },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            }), basePath: "/api/");
-
+        await using var server = await LoopbackJsonServer.StartAsync(_ => LoopbackJsonResponse.Raw(FlagsWireResponse), basePath: "/api/");
         await using var client = new ReflagClient(new ReflagClientOptions
         {
             SecretKey = "validSecretKeyWithMoreThan22Chars",
             ApiBaseUrl = server.BaseUri,
             FlagsFetchRetries = 0,
-            Batch = new ReflagBatchOptions
-            {
-                FlushOnExit = false,
-            },
+            Batch = new ReflagBatchOptions { FlushOnExit = false },
         });
-
         await client.InitializeAsync();
 
-        var bootstrapped = client.GetFlagsForBootstrap(new ReflagContext
-        {
-            Company = new ReflagCompanyContext
-            {
-                Id = "company-456",
-            },
-        });
+        var bootstrapped = client.GetFlagsForBootstrap(
+            ReflagContext.From(new { User = new { Id = "user-1" }, Company = new { plan = "free", Id = "company-999" } }));
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(bootstrapped));
+        var root = json.RootElement;
 
-        Assert.True(client.GetFlag("f-1", new ReflagContext
-        {
-            Company = new ReflagCompanyContext
-            {
-                Id = "company-456",
-            },
-        }));
-        Assert.True(bootstrapped.Flags["f-1"].Value);
-        Assert.Equal(2, bootstrapped.Flags["f-1"].TargetingVersion);
-        Assert.Equal(new[] { true }, bootstrapped.Flags["f-1"].RuleEvaluationResults);
+        Assert.Equal(2, root.GetProperty("protocolVersion").GetInt32());
+        Assert.Equal(123, root.GetProperty("flagStateVersion").GetInt32());
+        // Context keys are canonical (sorted) and use wire names.
+        Assert.Equal(
+            "{\"company\":{\"id\":\"company-999\",\"plan\":\"free\"},\"user\":{\"id\":\"user-1\"}}",
+            root.GetProperty("context").GetRawText());
+
+        var model = root.GetProperty("flags").GetProperty("model");
+        Assert.Equal("model", model.GetProperty("flagKey").GetString());
+        Assert.True(model.GetProperty("resolved").GetBoolean());
+        Assert.Equal("cheap", model.GetProperty("variantKey").GetString());
+        Assert.Equal("fv-model", model.GetProperty("sourceVersionId").GetString());
+        Assert.Equal("split", model.GetProperty("matchedRuleId").GetString());
+        Assert.Equal(1, model.GetProperty("allocationIndex").GetInt32());
+        Assert.Equal("small", model.GetProperty("value").GetProperty("name").GetString());
+        Assert.Equal(
+            "[{\"ruleId\":\"enterprise\",\"matched\":false},{\"ruleId\":\"split\",\"matched\":true,\"allocationIndex\":1,\"destination\":{\"type\":\"variant\",\"variantKey\":\"cheap\"}}]",
+            model.GetProperty("ruleResults").GetRawText());
+        Assert.Equal(0, model.GetProperty("errors").GetArrayLength());
+
+        // Bootstrapping is not a read: only user/company updates are sent, never checks.
+        await client.FlushAsync();
+        Assert.DoesNotContain(server.Requests, request => request.Body.Contains("feature-flag-event", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task GetFlag_and_FlushAsync_send_feature_flag_check_event_over_real_http_server()
+    public async Task GetFlag_and_FlushAsync_send_variant_check_event_over_real_http_server()
     {
         await using var server = await LoopbackJsonServer.StartAsync(request =>
         {
-            if (request.Method == "GET" && request.Path == "/api/features")
+            if (request.Method == "GET" && request.Path == "/api/flags")
             {
-                return LoopbackJsonResponse.Json(new
-                {
-                    success = true,
-                    flagStateVersion = 1,
-                    features = new object[]
-                    {
-                        new
-                        {
-                            key = "new-dashboard",
-                            targeting = new
-                            {
-                                version = 7,
-                                rules = new object[]
-                                {
-                                    new
-                                    {
-                                        filter = new
-                                        {
-                                            type = "context",
-                                            field = "company.id",
-                                            @operator = "IS",
-                                            values = new[] { "company-456" },
-                                        },
-                                        value = true,
-                                    },
-                                },
-                            },
-                        },
-                    },
-                });
+                return LoopbackJsonResponse.Raw(FlagsWireResponse);
             }
 
             if (request.Method == "POST" && request.Path == "/api/bulk")
@@ -245,43 +174,74 @@ public sealed class ReflagEndToEndTests
         });
 
         await client.InitializeAsync();
-        var enabled = client.GetFlag(
-            "new-dashboard",
+        var model = client.GetFlag(
+            "model",
             new ReflagContext
             {
-                User = new ReflagUserContext
-                {
-                    Id = "user-123",
-                },
+                User = new ReflagUserContext { Id = "user-123" },
                 Company = new ReflagCompanyContext
                 {
                     Id = "company-456",
+                    Attributes = new Dictionary<string, object?> { ["plan"] = "enterprise" },
                 },
-                Other = new Dictionary<string, object?>
-                {
-                    ["environment"] = "staging",
-                },
-            });
+                Other = new Dictionary<string, object?> { ["environment"] = "staging" },
+            },
+            new ModelConfig("fallback", 1));
 
         await client.FlushAsync();
 
-        Assert.True(enabled);
+        Assert.Equal("large", model.Name);
         Assert.Equal(2, server.Requests.Count);
         var bulkRequest = server.Requests.Single(request => request.Method == "POST");
-        Assert.Equal("/api/bulk", bulkRequest.Path);
-
         using var body = JsonDocument.Parse(bulkRequest.Body);
         var items = body.RootElement.EnumerateArray().ToList();
         Assert.Equal(3, items.Count);
 
         var eventItem = items.Single(item => item.GetProperty("type").GetString() == "feature-flag-event");
         Assert.Equal("check", eventItem.GetProperty("action").GetString());
-        Assert.Equal("new-dashboard", eventItem.GetProperty("key").GetString());
-        Assert.Equal(7, eventItem.GetProperty("targetingVersion").GetInt32());
-        Assert.True(eventItem.GetProperty("evalResult").GetBoolean());
+        Assert.Equal("model", eventItem.GetProperty("key").GetString());
+        // The selected variant key is reported, never the JSON payload.
+        Assert.Equal("quality", eventItem.GetProperty("evalResult").GetString());
+        Assert.Equal("fv-model", eventItem.GetProperty("sourceVersionId").GetString());
+        Assert.Equal("enterprise", eventItem.GetProperty("matchedRuleId").GetString());
+        Assert.Equal(123, eventItem.GetProperty("flagStateVersion").GetInt32());
+        Assert.Equal("[true]", eventItem.GetProperty("evalRuleResults").GetRawText());
+        Assert.False(eventItem.TryGetProperty("targetingVersion", out _));
+        Assert.False(eventItem.TryGetProperty("evalErrors", out _));
         Assert.Equal("user-123", eventItem.GetProperty("evalContext").GetProperty("user").GetProperty("id").GetString());
-        Assert.Equal("company-456", eventItem.GetProperty("evalContext").GetProperty("company").GetProperty("id").GetString());
+        Assert.Equal("enterprise", eventItem.GetProperty("evalContext").GetProperty("company").GetProperty("plan").GetString());
         Assert.Equal("staging", eventItem.GetProperty("evalContext").GetProperty("other").GetProperty("environment").GetString());
+    }
+
+    [Fact]
+    public async Task InitializeAsync_rejects_invalid_collections_without_retrying()
+    {
+        await using var server = await LoopbackJsonServer.StartAsync(_ => LoopbackJsonResponse.Raw("""
+            {
+              "success": true,
+              "protocolVersion": 2,
+              "flagStateVersion": 1,
+              "flags": [
+                { "key": "a", "sourceVersionId": "v", "variants": { "on": true }, "rules": [ { "id": "r", "filter": { "type": "segment", "key": "ghost" }, "result": { "type": "variant", "variantKey": "on" } }, { "id": "default", "filter": { "type": "constant", "value": true }, "result": { "type": "variant", "variantKey": "on" } } ] }
+              ],
+              "segments": []
+            }
+            """), basePath: "/api/");
+        var logger = new TestLogger();
+        await using var client = new ReflagClient(new ReflagClientOptions
+        {
+            SecretKey = "validSecretKeyWithMoreThan22Chars",
+            ApiBaseUrl = server.BaseUri,
+            FlagsFetchRetries = 3,
+            Logger = logger,
+            Batch = new ReflagBatchOptions { FlushOnExit = false },
+        });
+
+        await client.InitializeAsync();
+
+        Assert.Single(server.Requests);
+        Assert.Empty(client.GetFlagDefinitions().Flags);
+        Assert.False(client.GetFlag("a", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
     }
 
     [Fact]
@@ -289,14 +249,9 @@ public sealed class ReflagEndToEndTests
     {
         await using var server = await LoopbackJsonServer.StartAsync(request =>
         {
-            if (request.Method == "GET" && request.Path == "/api/features")
+            if (request.Method == "GET" && request.Path == "/api/flags")
             {
-                return LoopbackJsonResponse.Json(new
-                {
-                    success = true,
-                    flagStateVersion = 1,
-                    features = Array.Empty<object>(),
-                });
+                return LoopbackJsonResponse.Raw(TestDefinitions.EmptyFlagsResponse);
             }
 
             if (request.Method == "POST" && request.Path == "/api/bulk")
@@ -483,6 +438,11 @@ public sealed class ReflagEndToEndTests
 
     private sealed record LoopbackJsonResponse(int StatusCode, string ContentType, string Body)
     {
+        public static LoopbackJsonResponse Raw(string body, int statusCode = 200)
+        {
+            return new LoopbackJsonResponse(statusCode, "application/json", body);
+        }
+
         public static LoopbackJsonResponse Json(object body, int statusCode = 200)
         {
             return new LoopbackJsonResponse(

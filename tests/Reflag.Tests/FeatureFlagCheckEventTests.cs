@@ -14,7 +14,7 @@ public sealed class FeatureFlagCheckEventTests
     {
         var transport = new TestTransport();
         transport.EnqueueGetJson(JsonSerializer.Serialize(
-            new FeaturesEnvelope
+            new FlagsEnvelope
             {
                 Success = true,
                 FlagStateVersion = 1,
@@ -77,10 +77,13 @@ public sealed class FeatureFlagCheckEventTests
         var eventItem = payload.Single(item => item.GetProperty("type").GetString() == "feature-flag-event");
         Assert.Equal("check", eventItem.GetProperty("action").GetString());
         Assert.Equal("new-dashboard", eventItem.GetProperty("key").GetString());
-        Assert.Equal(7, eventItem.GetProperty("targetingVersion").GetInt32());
-        Assert.True(eventItem.GetProperty("evalResult").GetBoolean());
+        Assert.Equal("on", eventItem.GetProperty("evalResult").GetString());
+        Assert.Equal("new-dashboard:v7", eventItem.GetProperty("sourceVersionId").GetString());
+        Assert.Equal("rule-0", eventItem.GetProperty("matchedRuleId").GetString());
+        Assert.Equal(1, eventItem.GetProperty("flagStateVersion").GetInt32());
         Assert.Equal(new[] { true }, eventItem.GetProperty("evalRuleResults").EnumerateArray().Select(item => item.GetBoolean()).ToArray());
-        Assert.Empty(eventItem.GetProperty("evalMissingFields").EnumerateArray());
+        Assert.False(eventItem.TryGetProperty("targetingVersion", out _));
+        Assert.False(eventItem.TryGetProperty("evalMissingFields", out _));
         Assert.False(eventItem.TryGetProperty("evalErrors", out _));
         Assert.Equal("user-123", eventItem.GetProperty("evalContext").GetProperty("user").GetProperty("id").GetString());
         Assert.Equal("Ada", eventItem.GetProperty("evalContext").GetProperty("user").GetProperty("name").GetString());
@@ -93,7 +96,7 @@ public sealed class FeatureFlagCheckEventTests
     public async Task GetFlag_for_unknown_flag_sends_feature_flag_event_without_targeting_metadata()
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson("{\"success\":true,\"flagStateVersion\":1,\"features\":[]}");
+        transport.EnqueueGetJson(TestDefinitions.EmptyFlagsResponse);
 
         await using var client = new ReflagClient(new ReflagClientOptions
         {
@@ -118,11 +121,15 @@ public sealed class FeatureFlagCheckEventTests
         Assert.Equal("feature-flag-event", eventItem.GetProperty("type").GetString());
         Assert.Equal("check", eventItem.GetProperty("action").GetString());
         Assert.Equal("unknown-flag", eventItem.GetProperty("key").GetString());
-        Assert.False(eventItem.GetProperty("evalResult").GetBoolean());
+        // No authored variant was selected, so no selection identity is reported.
+        Assert.False(eventItem.TryGetProperty("evalResult", out _));
+        Assert.False(eventItem.TryGetProperty("sourceVersionId", out _));
+        Assert.False(eventItem.TryGetProperty("matchedRuleId", out _));
+        Assert.Equal(1, eventItem.GetProperty("flagStateVersion").GetInt32());
         Assert.True(eventItem.TryGetProperty("evalContext", out var evalContext));
         Assert.Empty(evalContext.EnumerateObject());
         Assert.False(eventItem.TryGetProperty("targetingVersion", out _));
-        Assert.False(eventItem.TryGetProperty("evalRuleResults", out _));
+        Assert.Empty(eventItem.GetProperty("evalRuleResults").EnumerateArray());
         Assert.False(eventItem.TryGetProperty("evalMissingFields", out _));
         Assert.False(eventItem.TryGetProperty("evalErrors", out _));
     }
@@ -132,7 +139,7 @@ public sealed class FeatureFlagCheckEventTests
     {
         var transport = new TestTransport();
         transport.EnqueueGetJson(JsonSerializer.Serialize(
-            new FeaturesEnvelope
+            new FlagsEnvelope
             {
                 Success = true,
                 FlagStateVersion = 1,
@@ -181,7 +188,7 @@ public sealed class FeatureFlagCheckEventTests
     {
         var transport = new TestTransport();
         transport.EnqueueGetJson(JsonSerializer.Serialize(
-            new FeaturesEnvelope
+            new FlagsEnvelope
             {
                 Success = true,
                 FlagStateVersion = 1,
@@ -223,7 +230,7 @@ public sealed class FeatureFlagCheckEventTests
     {
         var transport = new TestTransport();
         transport.EnqueueGetJson(JsonSerializer.Serialize(
-            new FeaturesEnvelope
+            new FlagsEnvelope
             {
                 Success = true,
                 FlagStateVersion = 1,
@@ -275,7 +282,7 @@ public sealed class FeatureFlagCheckEventTests
     public async Task Diagnostics_are_in_checks_and_bootstrap_and_warnings_are_rate_limited(bool array)
     {
         var transport = new TestTransport();
-        transport.EnqueueGetJson(JsonSerializer.Serialize(new FeaturesEnvelope
+        transport.EnqueueGetJson(JsonSerializer.Serialize(new FlagsEnvelope
         {
             Success = true,
             Features = [TestDefinitions.CreateFlag("flag", 1, new FlagContextFilterDefinition
@@ -304,8 +311,8 @@ public sealed class FeatureFlagCheckEventTests
         Assert.Equal(array ? "UNSUPPORTED_ARRAY_OPERATOR" : "MISSING_CONTEXT_FIELD", error.Code);
         using var bootstrapJson = JsonDocument.Parse(JsonSerializer.Serialize(bootstrap, BootstrapJsonOptions));
         var bootstrapFlag = bootstrapJson.RootElement.GetProperty("flags").GetProperty("flag");
-        Assert.Equal(error.Code, Assert.Single(bootstrapFlag.GetProperty("evaluationErrors").EnumerateArray()).GetProperty("code").GetString());
-        Assert.False(bootstrapFlag.TryGetProperty("errors", out _));
+        Assert.Equal(error.Code, Assert.Single(bootstrapFlag.GetProperty("errors").EnumerateArray()).GetProperty("code").GetString());
+        Assert.False(bootstrapFlag.TryGetProperty("evaluationErrors", out _));
         await client.FlushAsync();
         var item = ToJsonArray(Assert.Single(transport.PostCalls).Body).Single(entry => entry.GetProperty("type").GetString() == "feature-flag-event");
         var wireError = Assert.Single(item.GetProperty("evalErrors").EnumerateArray());
@@ -315,13 +322,13 @@ public sealed class FeatureFlagCheckEventTests
         if (array)
         {
             Assert.Equal("GT", wireError.GetProperty("operator").GetString());
-            Assert.Empty(item.GetProperty("evalMissingFields").EnumerateArray());
         }
         else
         {
             Assert.False(wireError.TryGetProperty("operator", out _));
-            Assert.Equal("other.value", Assert.Single(item.GetProperty("evalMissingFields").EnumerateArray()).GetString());
         }
+
+        Assert.False(item.TryGetProperty("evalMissingFields", out _));
         Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules"));
     }
 
@@ -331,12 +338,17 @@ public sealed class FeatureFlagCheckEventTests
         return document.RootElement.EnumerateArray().Select(item => item.Clone()).ToList();
     }
 
-    private sealed class FeaturesEnvelope
+    private sealed class FlagsEnvelope
     {
         public bool Success { get; init; }
 
+        public int ProtocolVersion { get; } = 2;
+
         public int FlagStateVersion { get; init; }
 
+        [System.Text.Json.Serialization.JsonPropertyName("flags")]
         public IReadOnlyList<FlagDefinition> Features { get; init; } = Array.Empty<FlagDefinition>();
+
+        public IReadOnlyList<SegmentDefinition> Segments { get; } = Array.Empty<SegmentDefinition>();
     }
 }

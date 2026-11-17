@@ -138,29 +138,116 @@ internal sealed class TestTransport : HttpMessageHandler
 
 internal static class TestDefinitions
 {
+    public const string EmptyFlagsResponse =
+        "{\"success\":true,\"protocolVersion\":2,\"flagStateVersion\":1,\"flags\":[],\"segments\":[]}";
+
+    /// <summary>
+    /// A compiled Boolean flag: <paramref name="filter" /> selects <paramref name="value" />, otherwise the
+    /// catch-all selects <see langword="false" />.
+    /// </summary>
     public static FlagDefinition CreateFlag(
         string key,
         int version,
         FlagFilterDefinition filter,
-        bool value = true,
-        string? description = null)
+        bool value = true)
     {
         return new FlagDefinition
         {
             Key = key,
-            Description = description,
-            Targeting = new FlagTargetingDefinition
+            SourceVersionId = $"{key}:v{version}",
+            Variants = new Dictionary<string, JsonElement>
             {
-                Version = version,
-                Rules =
-                [
-                    new FlagTargetingRuleDefinition
-                    {
-                        Filter = filter,
-                        Value = value,
-                    },
-                ],
+                ["on"] = JsonSerializer.SerializeToElement(true),
+                ["off"] = JsonSerializer.SerializeToElement(false),
             },
+            Rules =
+            [
+                new FlagRuleDefinition
+                {
+                    Id = "rule-0",
+                    Filter = filter,
+                    Result = new FlagVariantRuleResultDefinition { VariantKey = value ? "on" : "off" },
+                },
+                new FlagRuleDefinition
+                {
+                    Id = "default",
+                    Filter = new FlagConstantFilterDefinition { Value = true },
+                    Result = new FlagVariantRuleResultDefinition { VariantKey = "off" },
+                },
+            ],
         };
     }
+
+    /// <summary>A compiled multivariate flag that always selects <paramref name="variantKey" />.</summary>
+    public static FlagDefinition CreateMultivariateFlag(
+        string key,
+        string variantKey,
+        IReadOnlyDictionary<string, object?> variants,
+        FlagFilterDefinition? filter = null,
+        string? defaultVariantKey = null)
+    {
+        var rules = new List<FlagRuleDefinition>();
+        if (filter is not null)
+        {
+            rules.Add(new FlagRuleDefinition
+            {
+                Id = "rule-0",
+                Filter = filter,
+                Result = new FlagVariantRuleResultDefinition { VariantKey = variantKey },
+            });
+        }
+
+        rules.Add(new FlagRuleDefinition
+        {
+            Id = "default",
+            Filter = new FlagConstantFilterDefinition { Value = true },
+            Result = new FlagVariantRuleResultDefinition { VariantKey = filter is null ? variantKey : defaultVariantKey ?? variantKey },
+        });
+
+        return new FlagDefinition
+        {
+            Key = key,
+            SourceVersionId = $"{key}:v1",
+            Variants = variants.ToDictionary(pair => pair.Key, pair => JsonSerializer.SerializeToElement(pair.Value)),
+            Rules = rules,
+        };
+    }
+
+    public static string FlagsResponse(int flagStateVersion, params FlagDefinition[] flags) =>
+        FlagsResponse(flagStateVersion, flags, Array.Empty<SegmentDefinition>());
+
+    public static string FlagsResponse(int flagStateVersion, FlagDefinition[] flags, SegmentDefinition[] segments)
+    {
+        return JsonSerializer.Serialize(
+            new
+            {
+                success = true,
+                protocolVersion = 2,
+                flagStateVersion,
+                flags,
+                segments,
+            },
+            ReflagJson.Options);
+    }
+
+    /// <summary>The wire shape of a Boolean flag whose catch-all selects <paramref name="value" />.</summary>
+    public static object ConstantFlagBody(string key, bool value) => new
+    {
+        key,
+        sourceVersionId = $"{key}:{(value ? "on" : "off")}",
+        variants = new Dictionary<string, bool> { ["on"] = true, ["off"] = false },
+        rules = new object[]
+        {
+            new
+            {
+                id = "default",
+                filter = new { type = "constant", value = true },
+                result = new { type = "variant", variantKey = value ? "on" : "off" },
+            },
+        },
+    };
+
+    /// <summary>The response body as an untyped object, for test servers that serialize anonymous objects.</summary>
+    public static object FlagsResponseBody(int flagStateVersion, params FlagDefinition[] flags) =>
+        JsonSerializer.Deserialize<JsonElement>(FlagsResponse(flagStateVersion, flags));
 }

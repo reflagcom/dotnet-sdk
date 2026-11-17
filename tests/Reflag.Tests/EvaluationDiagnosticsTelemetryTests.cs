@@ -9,12 +9,11 @@ public sealed class EvaluationDiagnosticsTelemetryTests
     private static readonly JsonSerializerOptions BootstrapJsonOptions = new(JsonSerializerDefaults.Web);
 
     [Theory]
-    [InlineData("GT", "private-context", "private-targeting", "INVALID_CONTEXT_VALUE", "INVALID_TARGETING_VALUE")]
-    [InlineData("DATE_AFTER", "private-context", "private-targeting", "INVALID_CONTEXT_VALUE", "INVALID_TARGETING_VALUE")]
-    [InlineData("BEFORE", "2024-01-10", "private-targeting", "INVALID_TARGETING_VALUE", null)]
-    [InlineData("FUTURE_OPERATOR", "private-context", "private-targeting", "UNKNOWN_OPERATOR", null)]
+    [InlineData("GT", "private-context", "private-targeting")]
+    [InlineData("DATE_AFTER", "private-context", "private-targeting")]
+    [InlineData("BEFORE", "2024-01-10", "private-targeting")]
     public async Task Scalar_diagnostics_reach_checks_bootstrap_and_rate_limited_warnings(
-        string op, string contextValue, string targetingValue, string firstCode, string? secondCode)
+        string op, string contextValue, string targetingValue)
     {
         var transport = new TestTransport();
         transport.EnqueueGetJson(Definitions(op, targetingValue));
@@ -30,17 +29,19 @@ public sealed class EvaluationDiagnosticsTelemetryTests
         Assert.True(client.GetFlag("healthy", new ReflagContext()));
         var bootstrap = client.GetFlagsForBootstrap(context);
         var errors = bootstrap.Flags["flag"].Errors!;
-        Assert.Equal(secondCode is null ? new[] { firstCode } : new[] { firstCode, secondCode }, errors.Select(error => error.Code));
-        Assert.Null(bootstrap.Flags["healthy"].Errors);
+        Assert.Equal(new[] { "INVALID_COMPARISON" }, errors.Select(error => error.Code));
+        Assert.Empty(bootstrap.Flags["healthy"].Errors);
         using var bootstrapJson = JsonDocument.Parse(JsonSerializer.Serialize(bootstrap, BootstrapJsonOptions));
-        var bootstrapErrors = bootstrapJson.RootElement.GetProperty("flags").GetProperty("flag").GetProperty("evaluationErrors");
+        var bootstrapErrors = bootstrapJson.RootElement.GetProperty("flags").GetProperty("flag").GetProperty("errors");
 
         await client.FlushAsync();
         using var payload = JsonDocument.Parse(Assert.Single(transport.PostCalls).Body);
         var check = payload.RootElement.EnumerateArray().First(item => item.GetProperty("key").GetString() == "flag");
         Assert.Equal(bootstrapErrors.GetRawText(), check.GetProperty("evalErrors").GetRawText());
-        Assert.Empty(check.GetProperty("evalMissingFields").EnumerateArray());
-        Assert.Equal(new[] { false }, check.GetProperty("evalRuleResults").EnumerateArray().Select(item => item.GetBoolean()));
+        Assert.False(check.TryGetProperty("evalMissingFields", out _));
+        // The targeting rule failed; the catch-all default selected the "off" variant.
+        Assert.Equal(new[] { false, true }, check.GetProperty("evalRuleResults").EnumerateArray().Select(item => item.GetBoolean()));
+        Assert.Equal("off", check.GetProperty("evalResult").GetString());
         foreach (var error in check.GetProperty("evalErrors").EnumerateArray())
         {
             Assert.Equal("other.value", error.GetProperty("field").GetString());
@@ -96,14 +97,28 @@ public sealed class EvaluationDiagnosticsTelemetryTests
         Assert.False(client.GetFlag("flag", context));
         Assert.True(client.GetFlag("healthy", context));
         var bootstrap = client.GetFlagsForBootstrap(context);
-        Assert.Equal(new[] { "INVALID_CONTEXT_VALUE", "INVALID_TARGETING_VALUE" }, bootstrap.Flags["flag"].Errors!.Select(error => error.Code));
-        Assert.Null(bootstrap.Flags["healthy"].Errors);
+        Assert.Equal(new[] { "INVALID_COMPARISON" }, bootstrap.Flags["flag"].Errors.Select(error => error.Code));
+        Assert.Empty(bootstrap.Flags["healthy"].Errors);
 
         await client.FlushAsync();
         using var payload = JsonDocument.Parse(Assert.Single(transport.PostCalls).Body);
         var check = payload.RootElement.EnumerateArray().Single(item => item.GetProperty("key").GetString() == "flag");
-        Assert.Equal(new[] { "INVALID_CONTEXT_VALUE", "INVALID_TARGETING_VALUE", "CLIENT_NOT_INITIALIZED" },
+        Assert.Equal(new[] { "INVALID_COMPARISON", "CLIENT_NOT_INITIALIZED" },
             check.GetProperty("evalErrors").EnumerateArray().Select(error => error.GetProperty("code").GetString()));
+    }
+
+    [Fact]
+    public async Task Unknown_operators_reject_the_collection()
+    {
+        var transport = new TestTransport();
+        transport.EnqueueGetJson(Definitions("FUTURE_OPERATOR", "private-targeting"));
+        var logger = new TestLogger();
+        await using var client = new ReflagClient(Options(transport, logger));
+        await client.InitializeAsync();
+
+        Assert.Empty(client.GetFlagDefinitions().Flags);
+        Assert.False(client.GetFlag("healthy", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
+        Assert.Single(transport.GetCalls);
     }
 
     [Fact]
@@ -130,7 +145,7 @@ public sealed class EvaluationDiagnosticsTelemetryTests
         });
 
         Assert.True(client.GetFlag("flag", new ReflagContext()));
-        Assert.Null(client.GetFlagsForBootstrap(new ReflagContext()).Flags["flag"].Errors);
+        Assert.Empty(client.GetFlagsForBootstrap(new ReflagContext()).Flags["flag"].Errors);
         await client.FlushAsync();
         Assert.DoesNotContain(logger.Entries, entry => entry.Level == LogLevel.Error);
         Assert.Empty(transport.GetCalls);
@@ -154,23 +169,25 @@ public sealed class EvaluationDiagnosticsTelemetryTests
     private static string Definitions(string op, string value) => JsonSerializer.Serialize(new
     {
         success = true,
+        protocolVersion = 2,
         flagStateVersion = 1,
-        features = new object[]
+        flags = new object[]
         {
-            new
-            {
-                key = "flag",
-                targeting = new
-                {
-                    version = 1,
-                    rules = new[] { new { filter = new { type = "context", field = "other.value", @operator = op, values = new[] { value } } } },
-                },
-            },
-            new
-            {
-                key = "healthy",
-                targeting = new { version = 1, rules = new[] { new { filter = new { type = "constant", value = true } } } },
-            },
+            BooleanFlag("flag", new { type = "context", field = "other.value", @operator = op, values = new[] { value } }),
+            BooleanFlag("healthy", new { type = "constant", value = true }),
         },
+        segments = Array.Empty<object>(),
     });
+
+    private static object BooleanFlag(string key, object filter) => new
+    {
+        key,
+        sourceVersionId = $"{key}:v1",
+        variants = new { on = true, off = false },
+        rules = new object[]
+        {
+            new { id = "rule-0", filter, result = new { type = "variant", variantKey = "on" } },
+            new { id = "default", filter = new { type = "constant", value = true }, result = new { type = "variant", variantKey = "off" } },
+        },
+    };
 }

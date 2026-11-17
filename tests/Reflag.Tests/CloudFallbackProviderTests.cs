@@ -22,7 +22,7 @@ public sealed class CloudFallbackProviderTests
             CreateSnapshot("flag-a"));
 
         var write = Assert.Single(store.Writes);
-        Assert.Equal("reflag:flags-fallback:0123456789abcdef", write.Key);
+        Assert.Equal("reflag:flags-fallback:v2:0123456789abcdef", write.Key);
         Assert.Equal("flag-a", JsonSerializer.Deserialize<FlagsFallbackSnapshot>(write.Value, ReflagJson.Options)!.Flags[0].Key);
     }
 
@@ -40,7 +40,7 @@ public sealed class CloudFallbackProviderTests
         });
 
         Assert.Null(snapshot);
-        Assert.Equal("reflag:flags-fallback:0123456789abcdef", Assert.Single(store.Reads));
+        Assert.Equal("reflag:flags-fallback:v2:0123456789abcdef", Assert.Single(store.Reads));
     }
 
     [Fact]
@@ -53,7 +53,7 @@ public sealed class CloudFallbackProviderTests
             },
             new FakeRedisStringStore());
 
-        Assert.Equal("custom:prefix:0123456789abcdef", provider.BuildRedisKey("0123456789abcdef-fedcba9876543210"));
+        Assert.Equal("custom:prefix:v2:0123456789abcdef", provider.BuildRedisKey("0123456789abcdef-fedcba9876543210"));
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class CloudFallbackProviderTests
 
         var write = Assert.Single(store.Writes);
         Assert.Equal("reflag-bucket", write.Bucket);
-        Assert.Equal("reflag/flags-fallback/flags-fallback-0123456789abcdef.json", write.Key);
+        Assert.Equal("reflag/flags-fallback/flags-fallback-v2-0123456789abcdef.json", write.Key);
         Assert.Equal("flag-b", JsonSerializer.Deserialize<FlagsFallbackSnapshot>(write.Value, ReflagJson.Options)!.Flags[0].Key);
     }
 
@@ -99,7 +99,7 @@ public sealed class CloudFallbackProviderTests
         Assert.Null(snapshot);
         var read = Assert.Single(store.Reads);
         Assert.Equal("reflag-bucket", read.Bucket);
-        Assert.Equal("reflag/flags-fallback/flags-fallback-0123456789abcdef.json", read.Key);
+        Assert.Equal("reflag/flags-fallback/flags-fallback-v2-0123456789abcdef.json", read.Key);
     }
 
     [Fact]
@@ -131,7 +131,7 @@ public sealed class CloudFallbackProviderTests
 
         var write = Assert.Single(store.Writes);
         Assert.Equal("reflag-gcs-bucket", write.Bucket);
-        Assert.Equal("reflag/flags-fallback/flags-fallback-abcdef0123456789.json", write.ObjectName);
+        Assert.Equal("reflag/flags-fallback/flags-fallback-v2-abcdef0123456789.json", write.ObjectName);
         Assert.Equal("flag-c", JsonSerializer.Deserialize<FlagsFallbackSnapshot>(write.Content, ReflagJson.Options)!.Flags[0].Key);
     }
 
@@ -158,7 +158,7 @@ public sealed class CloudFallbackProviderTests
         Assert.Equal("flag-d", snapshot.Flags[0].Key);
         var read = Assert.Single(store.Reads);
         Assert.Equal("reflag-gcs-bucket", read.Bucket);
-        Assert.Equal("reflag/flags-fallback/flags-fallback-abcdef0123456789.json", read.ObjectName);
+        Assert.Equal("reflag/flags-fallback/flags-fallback-v2-abcdef0123456789.json", read.ObjectName);
     }
 
     [Fact]
@@ -173,7 +173,7 @@ public sealed class CloudFallbackProviderTests
             new FakeGcsObjectStore());
 
         Assert.Equal(
-            "custom/prefix/flags-fallback-abcdef0123456789.json",
+            "custom/prefix/flags-fallback-v2-abcdef0123456789.json",
             provider.BuildObjectKey("abcdef0123456789-fedcba9876543210"));
     }
 
@@ -200,7 +200,7 @@ public sealed class CloudFallbackProviderTests
     {
         return new FlagsFallbackSnapshot
         {
-            SchemaVersion = 1,
+            SchemaVersion = 2,
             SavedAt = new DateTimeOffset(2026, 4, 16, 12, 0, 0, TimeSpan.Zero),
             Flags =
             [

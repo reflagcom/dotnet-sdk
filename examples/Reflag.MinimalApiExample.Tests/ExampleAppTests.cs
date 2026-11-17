@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
@@ -67,10 +68,34 @@ public sealed class ExampleAppTests
             [key] = expected,
         });
 
-        var bootstrapped = await harness.HttpClient.GetFromJsonAsync<ReflagBootstrappedFlags>("/bootstrap?context.user.id=test-user");
+        using var bootstrapped = JsonDocument.Parse(await harness.HttpClient.GetStringAsync("/bootstrap?context.user.id=test-user"));
 
-        Assert.NotNull(bootstrapped);
-        Assert.Equal(expected, bootstrapped.Flags[key].Value);
+        Assert.Equal(2, bootstrapped.RootElement.GetProperty("protocolVersion").GetInt32());
+        Assert.Equal("test-user", bootstrapped.RootElement.GetProperty("context").GetProperty("user").GetProperty("id").GetString());
+        var flag = bootstrapped.RootElement.GetProperty("flags").GetProperty(key);
+        Assert.Equal(expected, flag.GetProperty("value").GetBoolean());
+        // Overrides are not authored selections.
+        Assert.False(flag.GetProperty("resolved").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ConfigEndpointReturnsJsonValuesFromOverrides()
+    {
+        await using var harness = await ExampleAppHarness.StartAsync();
+        var reflagClient = harness.App.Services.GetRequiredService<ReflagClient>();
+
+        using var _ = reflagClient.PushFlagOverrides(new Dictionary<string, object?>
+        {
+            ["model"] = new { name = "large", maxTokens = 8000 },
+        });
+
+        using var response = JsonDocument.Parse(await harness.HttpClient.GetStringAsync("/config/model"));
+        var value = response.RootElement.GetProperty("value");
+        Assert.Equal("large", value.GetProperty("name").GetString());
+        Assert.Equal(8000, value.GetProperty("maxTokens").GetInt32());
+
+        using var missing = JsonDocument.Parse(await harness.HttpClient.GetStringAsync("/config/missing"));
+        Assert.Equal(JsonValueKind.Null, missing.RootElement.GetProperty("value").ValueKind);
     }
 
     private sealed class ExampleAppHarness(WebApplication app) : IAsyncDisposable

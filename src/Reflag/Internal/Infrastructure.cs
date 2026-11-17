@@ -132,88 +132,86 @@ internal static class ReflagJson
 
         options.Converters.Add(new FlagFilterDefinitionJsonConverter());
         options.Converters.Add(new FlagContextFilterOperatorJsonConverter());
-        options.Converters.Add(new FlagTargetingRuleDefinitionJsonConverter());
-        options.Converters.Add(new FlagDefinitionJsonConverter());
+        options.Converters.Add(new FlagRuleResultDefinitionJsonConverter());
         return options;
     }
 }
 
-internal sealed class FlagDefinitionJsonConverter : JsonConverter<FlagDefinition>
+internal sealed class FlagRuleResultDefinitionJsonConverter : JsonConverter<FlagRuleResultDefinition>
 {
-    public override FlagDefinition Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override FlagRuleResultDefinition Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-
-        var key = root.TryGetProperty("key", out var keyElement) && keyElement.ValueKind == JsonValueKind.String
-            ? keyElement.GetString() ?? string.Empty
-            : string.Empty;
-
-        string? description = null;
-        if (root.TryGetProperty("description", out var descriptionElement) &&
-            descriptionElement.ValueKind != JsonValueKind.Null)
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !document.RootElement.TryGetProperty("type", out var typeElement) ||
+            typeElement.ValueKind != JsonValueKind.String)
         {
-            description = descriptionElement.GetString();
+            throw new JsonException("Flag rule result must contain a string 'type' property.");
         }
 
-        FlagTargetingDefinition? targeting = null;
-        if (root.TryGetProperty("targeting", out var targetingElement))
+        var raw = document.RootElement.GetRawText();
+        return typeElement.GetString() switch
         {
-            targeting = JsonSerializer.Deserialize<FlagTargetingDefinition>(targetingElement.GetRawText(), options);
-        }
-
-        return new FlagDefinition
-        {
-            Key = key,
-            Description = description,
-            Targeting = targeting ?? new FlagTargetingDefinition(),
+            "variant" => JsonSerializer.Deserialize<FlagVariantRuleResultDefinition>(raw, options)
+                         ?? throw new JsonException("Failed to deserialize variant rule result."),
+            "percentageDistribution" => JsonSerializer.Deserialize<FlagPercentageDistributionRuleResultDefinition>(raw, options)
+                                        ?? throw new JsonException("Failed to deserialize percentage distribution."),
+            var unknown => throw new JsonException($"Unknown flag rule result type '{unknown}'."),
         };
     }
 
-    public override void Write(Utf8JsonWriter writer, FlagDefinition value, JsonSerializerOptions options)
+    public override void Write(Utf8JsonWriter writer, FlagRuleResultDefinition value, JsonSerializerOptions options)
     {
-        writer.WriteStartObject();
-        writer.WriteString("key", value.Key);
-
-        if (value.Description is not null)
+        switch (value)
         {
-            writer.WriteString("description", value.Description);
+            case FlagVariantRuleResultDefinition variant:
+                writer.WriteStartObject();
+                writer.WriteString("type", variant.Type);
+                writer.WriteString("variantKey", variant.VariantKey);
+                writer.WriteEndObject();
+                break;
+            case FlagPercentageDistributionRuleResultDefinition distribution:
+                writer.WriteStartObject();
+                writer.WriteString("type", distribution.Type);
+                writer.WriteString("key", distribution.Key);
+                writer.WriteString("attribute", distribution.Attribute);
+                writer.WritePropertyName("allocations");
+                JsonSerializer.Serialize(writer, distribution.Allocations, options);
+                writer.WriteEndObject();
+                break;
+            default:
+                throw new JsonException($"Unknown flag rule result runtime type '{value.GetType().FullName}'.");
         }
-
-        writer.WritePropertyName("targeting");
-        JsonSerializer.Serialize(writer, value.Targeting, options);
-        writer.WriteEndObject();
     }
 }
 
-internal sealed class FlagTargetingRuleDefinitionJsonConverter : JsonConverter<FlagTargetingRuleDefinition>
+internal sealed class ReflagBootstrappedFlagsJsonConverter : JsonConverter<ReflagBootstrappedFlags>
 {
-    public override FlagTargetingRuleDefinition Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    public override ReflagBootstrappedFlags Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-
-        var filter = root.TryGetProperty("filter", out var filterElement)
-            ? JsonSerializer.Deserialize<FlagFilterDefinition>(filterElement.GetRawText(), options)
-            : null;
-
-        var value = root.TryGetProperty("value", out var valueElement)
-            ? valueElement.GetBoolean()
-            : true;
-
-        return new FlagTargetingRuleDefinition
-        {
-            Filter = filter ?? throw new JsonException("Flag rule must contain a filter."),
-            Value = value,
-        };
+        throw new NotSupportedException("ReflagBootstrappedFlags is a serialization-only payload.");
     }
 
-    public override void Write(Utf8JsonWriter writer, FlagTargetingRuleDefinition value, JsonSerializerOptions options)
+    public override void Write(Utf8JsonWriter writer, ReflagBootstrappedFlags value, JsonSerializerOptions options)
     {
         writer.WriteStartObject();
-        writer.WritePropertyName("filter");
-        JsonSerializer.Serialize(writer, value.Filter, options);
-        writer.WriteBoolean("value", value.Value);
+        writer.WriteNumber("protocolVersion", value.ProtocolVersion);
+        writer.WritePropertyName("context");
+        writer.WriteRawValue(CanonicalContextJson.Serialize(ReflagContextNormalizer.ToEvaluationObject(value.Context)));
+        writer.WritePropertyName("flags");
+        writer.WriteStartObject();
+        foreach (var pair in value.Flags)
+        {
+            writer.WritePropertyName(pair.Key);
+            JsonSerializer.Serialize(writer, pair.Value, ReflagJson.Options);
+        }
+
+        writer.WriteEndObject();
+        if (value.FlagStateVersion is { } flagStateVersion)
+        {
+            writer.WriteNumber("flagStateVersion", flagStateVersion);
+        }
+
         writer.WriteEndObject();
     }
 }
@@ -223,7 +221,8 @@ internal sealed class FlagFilterDefinitionJsonConverter : JsonConverter<FlagFilt
     public override FlagFilterDefinition Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
-        if (!document.RootElement.TryGetProperty("type", out var typeElement) ||
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            !document.RootElement.TryGetProperty("type", out var typeElement) ||
             typeElement.ValueKind != JsonValueKind.String)
         {
             throw new JsonException("Flag filter must contain a string 'type' property.");
@@ -242,6 +241,10 @@ internal sealed class FlagFilterDefinitionJsonConverter : JsonConverter<FlagFilt
                                     ?? throw new JsonException("Failed to deserialize rollout filter."),
             "constant" => JsonSerializer.Deserialize<FlagConstantFilterDefinition>(raw, options)
                            ?? throw new JsonException("Failed to deserialize constant filter."),
+            "flag" => JsonSerializer.Deserialize<FlagReferenceFilterDefinition>(raw, options)
+                      ?? throw new JsonException("Failed to deserialize flag reference filter."),
+            "segment" => JsonSerializer.Deserialize<SegmentReferenceFilterDefinition>(raw, options)
+                         ?? throw new JsonException("Failed to deserialize segment reference filter."),
             var unknown => throw new JsonException($"Unknown flag filter type '{unknown}'."),
         };
     }
@@ -264,6 +267,12 @@ internal sealed class FlagFilterDefinitionJsonConverter : JsonConverter<FlagFilt
                 break;
             case FlagConstantFilterDefinition constant:
                 JsonSerializer.Serialize(writer, constant, options);
+                break;
+            case FlagReferenceFilterDefinition flagReference:
+                JsonSerializer.Serialize(writer, flagReference, options);
+                break;
+            case SegmentReferenceFilterDefinition segmentReference:
+                JsonSerializer.Serialize(writer, segmentReference, options);
                 break;
             default:
                 throw new JsonException($"Unknown flag filter runtime type '{value.GetType().FullName}'.");

@@ -19,7 +19,7 @@ public sealed class PushSyncTests
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
                 if (request.Query.TryGetValue("waitForVersion", out var waitForVersion) && waitForVersion == "2")
                 {
@@ -29,8 +29,10 @@ public sealed class PushSyncTests
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = 1,
-                    features = Array.Empty<object>(),
+                    flags = Array.Empty<object>(),
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }
@@ -60,7 +62,7 @@ public sealed class PushSyncTests
         await client.InitializeAsync();
         await WaitUntilAsync(() => waitForVersionSeen.Task.IsCompleted, TimeSpan.FromSeconds(5));
 
-        Assert.Contains(server.Requests, request => request.Path == "/features" && request.Query.TryGetValue("waitForVersion", out var value) && value == "2");
+        Assert.Contains(server.Requests, request => request.Path == "/flags" && request.Query.TryGetValue("waitForVersion", out var value) && value == "2");
     }
 
     [Fact]
@@ -70,7 +72,7 @@ public sealed class PushSyncTests
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
                 var version = request.Query.TryGetValue("waitForVersion", out var waitForVersion) && waitForVersion == "2"
                     ? 2
@@ -84,30 +86,10 @@ public sealed class PushSyncTests
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = version,
-                    features = new object[]
-                    {
-                        new
-                        {
-                            key = "f1",
-                            targeting = new
-                            {
-                                version,
-                                rules = new object[]
-                                {
-                                    new
-                                    {
-                                        filter = new
-                                        {
-                                            type = "constant",
-                                            value = true,
-                                        },
-                                        value = version == 2,
-                                    },
-                                },
-                            },
-                        },
-                    },
+                    flags = new object[] { TestDefinitions.ConstantFlagBody("f1", version == 2) },
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }
@@ -147,7 +129,7 @@ public sealed class PushSyncTests
         });
 
         Assert.True(enabled);
-        Assert.Contains(server.Requests, request => request.Path == "/features" && request.Query.TryGetValue("waitForVersion", out var value) && value == "2");
+        Assert.Contains(server.Requests, request => request.Path == "/flags" && request.Query.TryGetValue("waitForVersion", out var value) && value == "2");
     }
 
     [Fact]
@@ -157,7 +139,7 @@ public sealed class PushSyncTests
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
                 if (request.Query.TryGetValue("waitForVersion", out var waitForVersion) && waitForVersion == "2")
                 {
@@ -167,8 +149,10 @@ public sealed class PushSyncTests
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = 1,
-                    features = Array.Empty<object>(),
+                    flags = Array.Empty<object>(),
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }
@@ -208,15 +192,15 @@ public sealed class PushSyncTests
     [Fact]
     public async Task Push_mode_triggers_full_refresh_after_sse_reconnect()
     {
-        var featuresRequests = 0;
+        var flagsRequests = 0;
         var reconnectRefreshSeen = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sseConnections = 0;
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
-                var count = Interlocked.Increment(ref featuresRequests);
+                var count = Interlocked.Increment(ref flagsRequests);
                 if (count >= 2 && !request.Query.ContainsKey("waitForVersion"))
                 {
                     reconnectRefreshSeen.TrySetResult(null);
@@ -225,8 +209,10 @@ public sealed class PushSyncTests
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = 1,
-                    features = Array.Empty<object>(),
+                    flags = Array.Empty<object>(),
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }
@@ -261,9 +247,9 @@ public sealed class PushSyncTests
         await client.FlushAsync();
 
         Assert.True(Volatile.Read(ref sseConnections) >= 2);
-        Assert.Equal(2, server.Requests.Count(request => request.Path == "/features"));
+        Assert.Equal(2, server.Requests.Count(request => request.Path == "/flags"));
         Assert.All(
-            server.Requests.Where(request => request.Path == "/features"),
+            server.Requests.Where(request => request.Path == "/flags"),
             request => Assert.False(request.Query.ContainsKey("waitForVersion")));
     }
 
@@ -275,7 +261,7 @@ public sealed class PushSyncTests
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
                 var version = request.Query.TryGetValue("waitForVersion", out var waitForVersion) && waitForVersion == "2"
                     ? 2
@@ -289,30 +275,10 @@ public sealed class PushSyncTests
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = version,
-                    features = new object[]
-                    {
-                        new
-                        {
-                            key = "f1",
-                            targeting = new
-                            {
-                                version,
-                                rules = new object[]
-                                {
-                                    new
-                                    {
-                                        filter = new
-                                        {
-                                            type = "constant",
-                                            value = true,
-                                        },
-                                        value = version == 2,
-                                    },
-                                },
-                            },
-                        },
-                    },
+                    flags = new object[] { TestDefinitions.ConstantFlagBody("f1", version == 2) },
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }
@@ -388,7 +354,7 @@ public sealed class PushSyncTests
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
                 var version = request.Query.TryGetValue("waitForVersion", out var waitForVersion) && waitForVersion == "3"
                     ? 3
@@ -402,30 +368,10 @@ public sealed class PushSyncTests
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = version,
-                    features = new object[]
-                    {
-                        new
-                        {
-                            key = "f1",
-                            targeting = new
-                            {
-                                version,
-                                rules = new object[]
-                                {
-                                    new
-                                    {
-                                        filter = new
-                                        {
-                                            type = "constant",
-                                            value = true,
-                                        },
-                                        value = version == 3,
-                                    },
-                                },
-                            },
-                        },
-                    },
+                    flags = new object[] { TestDefinitions.ConstantFlagBody("f1", version == 3) },
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }
@@ -483,7 +429,7 @@ public sealed class PushSyncTests
         await WaitUntilAsync(() => waitForVersionSeen.Task.IsCompleted, TimeSpan.FromSeconds(5));
         Assert.True(client.GetFlag("f1", new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("failed to parse SSE message"));
-        Assert.DoesNotContain(server.Requests, request => request.Path == "/features" && request.Query.TryGetValue("waitForVersion", out var value) && value == "99");
+        Assert.DoesNotContain(server.Requests, request => request.Path == "/flags" && request.Query.TryGetValue("waitForVersion", out var value) && value == "99");
     }
 
     [Fact]
@@ -493,35 +439,15 @@ public sealed class PushSyncTests
 
         await using var server = await AsyncLoopbackServer.StartAsync(async (request, context, cancellationToken) =>
         {
-            if (request.Path == "/features")
+            if (request.Path == "/flags")
             {
                 await AsyncLoopbackServer.WriteJsonAsync(context, new
                 {
                     success = true,
+                    protocolVersion = 2,
                     flagStateVersion = 1,
-                    features = new object[]
-                    {
-                        new
-                        {
-                            key = "f1",
-                            targeting = new
-                            {
-                                version = 1,
-                                rules = new object[]
-                                {
-                                    new
-                                    {
-                                        filter = new
-                                        {
-                                            type = "constant",
-                                            value = true,
-                                        },
-                                        value = true,
-                                    },
-                                },
-                            },
-                        },
-                    },
+                    flags = new object[] { TestDefinitions.ConstantFlagBody("f1", true) },
+                    segments = Array.Empty<object>(),
                 }).ConfigureAwait(false);
                 return;
             }

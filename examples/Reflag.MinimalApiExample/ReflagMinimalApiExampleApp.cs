@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -79,6 +80,7 @@ public static class ReflagMinimalApiExampleApp
             "/flags/demo-flag",
             "/flags/new-dashboard?userId=user-123&companyId=company-456",
             "/flags/new-dashboard?context.user.id=user-123&context.company.id=company-456&context.company.plan=enterprise",
+            "/config/model?context.company.id=company-456",
             "/bootstrap?context.user.id=user-123&context.user.name=bleh&context.company.id=company-456",
             "/bootstrap?context.user.id=user-123&context.user.attributes.plan=enterprise&context.other.environment=staging",
         };
@@ -105,6 +107,22 @@ public static class ReflagMinimalApiExampleApp
                 key,
                 enabled,
                 context = bound.Context,
+            });
+        });
+
+        // Multivariate flags return arbitrary JSON. Read them as JsonNode, JsonElement or your own type.
+        app.MapGet("/config/{key}", (HttpRequest request, string key, ReflagClient client) =>
+        {
+            var bound = client.BindClient(ExampleContextQueryParser.Build(
+                request,
+                defaultUserId: "demo-user",
+                defaultEnvironment: app.Environment.EnvironmentName));
+
+            var value = bound.GetFlag<JsonNode?>(key, null);
+            return Results.Ok(new
+            {
+                key,
+                value,
             });
         });
 

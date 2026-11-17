@@ -14,10 +14,18 @@ namespace Reflag;
 
 public static class ReflagFallbackProviders
 {
+    /// <summary>A value-only fallback for Boolean flags. Static values do not identify authored variants.</summary>
     public static IFlagsFallbackProvider Static(IReadOnlyDictionary<string, bool> flags)
     {
         ThrowHelpers.ThrowIfNull(flags, nameof(flags));
-        return new StaticFlagsFallbackProvider(CollectionHelpers.ToDictionary(flags, StringComparer.Ordinal));
+        return new StaticFlagsFallbackProvider(FlagValueConversion.ToJsonOverrides(flags));
+    }
+
+    /// <summary>A value-only fallback with arbitrary JSON-serializable values.</summary>
+    public static IFlagsFallbackProvider Static(IReadOnlyDictionary<string, object?> flags)
+    {
+        ThrowHelpers.ThrowIfNull(flags, nameof(flags));
+        return new StaticFlagsFallbackProvider(FlagValueConversion.ToJsonOverrides(flags));
     }
 
     public static IFlagsFallbackProvider File(FileFallbackProviderOptions? options = null)
@@ -50,7 +58,7 @@ public static class ReflagFallbackProviders
         return new GcsFlagsFallbackProvider(options);
     }
 
-    private sealed class StaticFlagsFallbackProvider(IReadOnlyDictionary<string, bool> flags) : IFlagsFallbackProvider
+    private sealed class StaticFlagsFallbackProvider(IReadOnlyDictionary<string, JsonElement> flags) : IFlagsFallbackProvider
     {
         public Task<FlagsFallbackSnapshot?> LoadAsync(
             FlagsFallbackProviderContext context,
@@ -58,26 +66,26 @@ public static class ReflagFallbackProviders
         {
             var snapshot = new FlagsFallbackSnapshot
             {
-                SchemaVersion = 1,
+                SchemaVersion = FlagsFallbackSnapshot.CurrentSchemaVersion,
+                Source = "static",
                 SavedAt = DateTimeOffset.UtcNow,
                 Flags = flags.Select(pair => new FlagDefinition
                 {
                     Key = pair.Key,
-                    Targeting = new FlagTargetingDefinition
+                    SourceVersionId = $"static:{pair.Key}",
+                    Variants = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
                     {
-                        Version = 0,
-                        Rules =
-                        [
-                            new FlagTargetingRuleDefinition
-                            {
-                                Filter = new FlagConstantFilterDefinition
-                                {
-                                    Value = true,
-                                },
-                                Value = pair.Value,
-                            },
-                        ],
+                        ["default"] = pair.Value,
                     },
+                    Rules =
+                    [
+                        new FlagRuleDefinition
+                        {
+                            Id = "default",
+                            Filter = new FlagConstantFilterDefinition { Value = true },
+                            Result = new FlagVariantRuleResultDefinition { VariantKey = "default" },
+                        },
+                    ],
                 }).ToArray(),
             };
 
@@ -257,7 +265,7 @@ public static class ReflagFallbackProviders
 
         internal string BuildRedisKey(string secretKeyHash)
         {
-            return $"{_keyPrefix}:{GetSecretKeyHashPrefix(secretKeyHash)}";
+            return $"{_keyPrefix}:v2:{GetSecretKeyHashPrefix(secretKeyHash)}";
         }
 
         private static IRedisStringStore CreateStore(RedisFallbackProviderOptions options)
@@ -574,7 +582,7 @@ public static class ReflagFallbackProviders
 
     private static string BuildSnapshotFileName(string secretKeyHash)
     {
-        return $"flags-fallback-{GetSecretKeyHashPrefix(secretKeyHash)}.json";
+        return $"flags-fallback-v2-{GetSecretKeyHashPrefix(secretKeyHash)}.json";
     }
 
     private static string BuildObjectName(string prefix, string secretKeyHash)

@@ -9,6 +9,13 @@ internal sealed class FlagContextFilterDefinitionJsonConverter : JsonConverter<F
     {
         using var document = JsonDocument.ParseValue(ref reader);
         var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("field", out var fieldElement) ||
+            fieldElement.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException("Flag context filter must contain a string 'field' property.");
+        }
+
         var operatorName = root.TryGetProperty("operator", out var operatorElement)
             ? operatorElement.ValueKind switch
             {
@@ -23,7 +30,7 @@ internal sealed class FlagContextFilterDefinitionJsonConverter : JsonConverter<F
 
         return new FlagContextFilterDefinition
         {
-            Field = root.TryGetProperty("field", out var fieldElement) ? fieldElement.GetString() ?? string.Empty : string.Empty,
+            Field = fieldElement.GetString()!,
             Operator = @operator,
             UnknownOperator = @operator == FlagContextFilterOperator.Unknown ? operatorName : null,
             Values = root.TryGetProperty("values", out var valuesElement) && valuesElement.ValueKind != JsonValueKind.Null

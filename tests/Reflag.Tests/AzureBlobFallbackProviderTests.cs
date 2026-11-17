@@ -16,7 +16,7 @@ public sealed class AzureBlobFallbackProviderTests
 
         var snapshot = new FlagsFallbackSnapshot
         {
-            SchemaVersion = 1,
+            SchemaVersion = 2,
             SavedAt = new DateTimeOffset(2026, 4, 16, 12, 0, 0, TimeSpan.Zero),
             Flags =
             [
@@ -35,7 +35,7 @@ public sealed class AzureBlobFallbackProviderTests
             snapshot);
 
         var upload = Assert.Single(container.Uploads);
-        Assert.Equal("reflag/flags-fallback/flags-fallback-0123456789abcdef.json", upload.BlobName);
+        Assert.Equal("reflag/flags-fallback/flags-fallback-v2-0123456789abcdef.json", upload.BlobName);
 
         var savedSnapshot = JsonSerializer.Deserialize<FlagsFallbackSnapshot>(upload.Content, ReflagJson.Options);
         Assert.NotNull(savedSnapshot);
@@ -60,7 +60,7 @@ public sealed class AzureBlobFallbackProviderTests
 
         Assert.Null(snapshot);
         Assert.Equal(
-            "reflag/flags-fallback/flags-fallback-0123456789abcdef.json",
+            "reflag/flags-fallback/flags-fallback-v2-0123456789abcdef.json",
             Assert.Single(container.Downloads));
     }
 
@@ -72,7 +72,7 @@ public sealed class AzureBlobFallbackProviderTests
             DownloadContent = JsonSerializer.Serialize(
                 new FlagsFallbackSnapshot
                 {
-                    SchemaVersion = 1,
+                    SchemaVersion = 2,
                     SavedAt = new DateTimeOffset(2026, 4, 16, 13, 0, 0, TimeSpan.Zero),
                     Flags =
                     [
@@ -95,11 +95,11 @@ public sealed class AzureBlobFallbackProviderTests
         });
 
         Assert.NotNull(snapshot);
-        Assert.Equal(1, snapshot.SchemaVersion);
+        Assert.Equal(2, snapshot.SchemaVersion);
         Assert.Single(snapshot.Flags);
         Assert.Equal("beta-flag", snapshot.Flags[0].Key);
         Assert.Equal(
-            "reflag/flags-fallback/flags-fallback-abcdef0123456789.json",
+            "reflag/flags-fallback/flags-fallback-v2-abcdef0123456789.json",
             Assert.Single(container.Downloads));
     }
 
@@ -114,7 +114,7 @@ public sealed class AzureBlobFallbackProviderTests
             new FakeAzureBlobContainerClient());
 
         Assert.Equal(
-            "custom/prefix/flags-fallback-0123456789abcdef.json",
+            "custom/prefix/flags-fallback-v2-0123456789abcdef.json",
             provider.BuildBlobName("0123456789abcdef-fedcba9876543210"));
     }
 
