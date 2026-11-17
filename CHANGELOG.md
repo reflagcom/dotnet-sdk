@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.2.0...v0.3.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* requires the /flags endpoint, changes the bootstrap payload (v2 browser SDKs only), diagnostic codes, fallback snapshot schema and storage keys, and replaces the v1 definition models.
+
+### Features
+
+* add structured scalar evaluation diagnostics ([#16](https://github.com/reflagcom/dotnet-sdk/issues/16)) ([6dfab7b](https://github.com/reflagcom/dotnet-sdk/commit/6dfab7b8776f26edbcdcfe0148c61dd1e820d82c))
+* support multivariate flags and protocol v2 ([#19](https://github.com/reflagcom/dotnet-sdk/issues/19)) ([d1cd91f](https://github.com/reflagcom/dotnet-sdk/commit/d1cd91f8ce8269f7a28198d3be6331588e61362c))
+
 ## [0.2.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.1.0...v0.2.0) (2026-09-15)
 
 
