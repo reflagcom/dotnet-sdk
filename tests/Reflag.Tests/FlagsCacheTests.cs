@@ -100,13 +100,10 @@ public sealed class FlagsCacheTests
 
         firstFetch.SetResult(new FlagsCacheRefreshResult([CreateCompiledDefinition("first")], 1));
 
-        var completed = await Task.WhenAny(firstRefreshTask, Task.Delay(TimeSpan.FromSeconds(1)));
-        Assert.Same(firstRefreshTask, completed);
-        Assert.True(firstRefreshTask.IsCompletedSuccessfully);
+        await firstRefreshTask.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(secondRefreshTask.IsCompleted);
 
-        var secondFetchStartedCompleted = await Task.WhenAny(secondFetchStarted.Task, Task.Delay(TimeSpan.FromSeconds(1)));
-        Assert.Same(secondFetchStarted.Task, secondFetchStartedCompleted);
+        await secondFetchStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(secondRefreshTask.IsCompleted);
 
         secondFetch.SetResult(new FlagsCacheRefreshResult([CreateCompiledDefinition("second")], 2));
