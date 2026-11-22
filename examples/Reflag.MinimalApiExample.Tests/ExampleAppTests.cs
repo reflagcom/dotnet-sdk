@@ -57,7 +57,7 @@ public sealed class ExampleAppTests
     [Theory]
     [InlineData("new-dashboard", true)]
     [InlineData("demo-flag", false)]
-    public async Task BootstrapEndpointReflectsScopedOverrideValues(string key, bool expected)
+    public async Task BootstrapEndpointOmitsUnclassifiedOfflineOverrides(string key, bool expected)
     {
         await using var harness = await ExampleAppHarness.StartAsync();
         var reflagClient = harness.App.Services.GetRequiredService<ReflagClient>();
@@ -70,7 +70,8 @@ public sealed class ExampleAppTests
         var bootstrapped = await harness.HttpClient.GetFromJsonAsync<ReflagBootstrappedFlags>("/bootstrap?context.user.id=test-user");
 
         Assert.NotNull(bootstrapped);
-        Assert.Equal(expected, bootstrapped.Flags[key].Value);
+        Assert.Empty(bootstrapped.Flags);
+        Assert.Equal(expected, reflagClient.GetFlag(key, new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
     }
 
     private sealed class ExampleAppHarness(WebApplication app) : IAsyncDisposable

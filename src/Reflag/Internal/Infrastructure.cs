@@ -165,6 +165,7 @@ internal sealed class FlagDefinitionJsonConverter : JsonConverter<FlagDefinition
         return new FlagDefinition
         {
             Key = key,
+            Secret = !root.TryGetProperty("secret", out var secret) || secret.ValueKind != JsonValueKind.False,
             Description = description,
             Targeting = targeting ?? new FlagTargetingDefinition(),
         };
@@ -174,6 +175,7 @@ internal sealed class FlagDefinitionJsonConverter : JsonConverter<FlagDefinition
     {
         writer.WriteStartObject();
         writer.WriteString("key", value.Key);
+        writer.WriteBoolean("secret", value.Secret);
 
         if (value.Description is not null)
         {

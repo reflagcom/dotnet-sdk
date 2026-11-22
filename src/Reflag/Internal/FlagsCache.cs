@@ -46,6 +46,14 @@ internal sealed class FlagsCache
         }
     }
 
+    public (CompiledFlagDefinition[]? Definitions, int? FlagStateVersion) GetSnapshot()
+    {
+        lock (_gate)
+        {
+            return (_value, _flagStateVersion);
+        }
+    }
+
     public DateTimeOffset? GetLastRefreshAt()
     {
         lock (_gate)

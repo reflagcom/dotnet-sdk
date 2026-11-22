@@ -180,6 +180,10 @@ public sealed class FlagDefinition
     [JsonPropertyName("key")]
     public string Key { get; init; } = string.Empty;
 
+    /// <summary>Server-only unless the definition explicitly declares <c>secret: false</c>.</summary>
+    [JsonPropertyName("secret")]
+    public bool Secret { get; init; } = true;
+
     [JsonPropertyName("description")]
     public string? Description { get; init; }
 
