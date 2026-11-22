@@ -154,6 +154,7 @@ internal static class TestDefinitions
         return new FlagDefinition
         {
             Key = key,
+            Secret = false,
             SourceVersionId = $"{key}:v{version}",
             Variants = new Dictionary<string, JsonElement>
             {
@@ -207,6 +208,7 @@ internal static class TestDefinitions
         return new FlagDefinition
         {
             Key = key,
+            Secret = false,
             SourceVersionId = $"{key}:v1",
             Variants = variants.ToDictionary(pair => pair.Key, pair => JsonSerializer.SerializeToElement(pair.Value)),
             Rules = rules,
@@ -234,6 +236,7 @@ internal static class TestDefinitions
     public static object ConstantFlagBody(string key, bool value) => new
     {
         key,
+        secret = false,
         sourceVersionId = $"{key}:{(value ? "on" : "off")}",
         variants = new Dictionary<string, bool> { ["on"] = true, ["off"] = false },
         rules = new object[]

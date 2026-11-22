@@ -61,6 +61,7 @@ internal sealed class PreparedFlagCollection
             copiedFlags.Add(new FlagDefinition
             {
                 Key = flag.Key,
+                Secret = flag.Secret,
                 SourceVersionId = flag.SourceVersionId,
                 // Detach variant values from any caller-owned JsonDocument.
                 Variants = new System.Collections.ObjectModel.ReadOnlyDictionary<string, JsonElement>(

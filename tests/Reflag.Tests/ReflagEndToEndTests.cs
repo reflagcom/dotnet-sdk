@@ -19,6 +19,7 @@ public sealed class ReflagEndToEndTests
           "flags": [
             {
               "key": "new-dashboard",
+              "secret": false,
               "sourceVersionId": "fv-dashboard",
               "variants": { "true": true, "false": false },
               "rules": [
@@ -28,6 +29,7 @@ public sealed class ReflagEndToEndTests
             },
             {
               "key": "model",
+              "secret": false,
               "sourceVersionId": "fv-model",
               "variants": {
                 "quality": { "name": "large", "maxTokens": 8000 },
@@ -41,6 +43,7 @@ public sealed class ReflagEndToEndTests
             },
             {
               "key": "quality-banner",
+              "secret": false,
               "sourceVersionId": "fv-banner",
               "variants": { "true": true, "false": false },
               "rules": [

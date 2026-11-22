@@ -257,8 +257,9 @@ public sealed class ReflagClient : IAsyncDisposable
     }
 
     /// <summary>
-    /// Evaluates all flags for a client SDK bootstrap payload (protocol v2). Serialization is not a read,
-    /// so no check events are registered.
+    /// Evaluates public flags for a client SDK bootstrap payload (protocol v2). Secret dependencies stay
+    /// available for evaluation but are not exported. Missing visibility metadata is server-only.
+    /// Serialization is not a read, so no check events are registered.
     /// </summary>
     public ReflagBootstrappedFlags GetFlagsForBootstrap(
         ReflagContext context,
@@ -269,10 +270,36 @@ public sealed class ReflagClient : IAsyncDisposable
         var normalizedTelemetry = NormalizeTelemetryOptions(telemetryOptions);
 
         var evaluation = EvaluateFlags(normalizedContext, normalizedTelemetry, null);
+        // An override callback can refresh the cache; visibility must belong to the evaluated snapshot.
+        var publicKeys = new HashSet<string>(
+            evaluation.Collection?.Definitions.Flags.Where(flag => !flag.Secret).Select(flag => flag.Key)
+                ?? Enumerable.Empty<string>(),
+            StringComparer.Ordinal);
         return new ReflagBootstrappedFlags
         {
             Context = normalizedContext,
-            Flags = evaluation.Flags,
+            Flags = evaluation.Flags.Where(pair => publicKeys.Contains(pair.Key)).ToDictionary(
+                pair => pair.Key,
+                pair => new RawReflagFlag
+                {
+                    FlagKey = pair.Value.FlagKey,
+                    Value = pair.Value.Value,
+                    Resolved = pair.Value.Resolved,
+                    SourceVersionId = pair.Value.SourceVersionId,
+                    VariantKey = pair.Value.VariantKey,
+                    MatchedRuleId = pair.Value.MatchedRuleId,
+                    AllocationIndex = pair.Value.AllocationIndex,
+                    RuleResults = pair.Value.RuleResults,
+                    // Dependency origins may name private flags or segments.
+                    Errors = pair.Value.Errors.Select(error => new ReflagEvaluationError
+                    {
+                        Code = error.Code,
+                        Message = error.Message,
+                        Field = error.Field,
+                        Operator = error.Operator,
+                    }).ToArray(),
+                },
+                StringComparer.Ordinal),
             FlagStateVersion = evaluation.FlagStateVersion,
         };
     }
@@ -747,7 +774,7 @@ public sealed class ReflagClient : IAsyncDisposable
             flags[key] = LocalResult(key, null);
         }
 
-        return new FlagsEvaluation(flags, snapshot?.FlagStateVersion, evaluatedBeforeInitialization);
+        return new FlagsEvaluation(flags, snapshot?.FlagStateVersion, evaluatedBeforeInitialization, collection);
     }
 
     private static RawReflagFlag LocalResult(string key, JsonElement? value)
@@ -1549,7 +1576,8 @@ public sealed class ReflagClient : IAsyncDisposable
     private sealed record FlagsEvaluation(
         Dictionary<string, RawReflagFlag> Flags,
         int? FlagStateVersion,
-        bool EvaluatedBeforeInitialization);
+        bool EvaluatedBeforeInitialization,
+        PreparedFlagCollection? Collection);
 
     private sealed class FlagOverrideScope(ReflagClient client, int layerId) : IDisposable
     {

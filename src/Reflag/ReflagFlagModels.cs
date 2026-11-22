@@ -144,6 +144,11 @@ public sealed class FlagDefinition
     [JsonRequired]
     public string Key { get; init; } = string.Empty;
 
+    /// <summary>Server-only unless the definition explicitly declares <c>secret: false</c>.</summary>
+    [JsonPropertyName("secret")]
+    [JsonConverter(typeof(FlagSecretJsonConverter))]
+    public bool Secret { get; init; } = true;
+
     /// <summary>Identifies the published flag version that produced this definition.</summary>
     [JsonPropertyName("sourceVersionId")]
     [JsonRequired]

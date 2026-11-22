@@ -58,7 +58,7 @@ public sealed class ExampleAppTests
     [Theory]
     [InlineData("new-dashboard", true)]
     [InlineData("demo-flag", false)]
-    public async Task BootstrapEndpointReflectsScopedOverrideValues(string key, bool expected)
+    public async Task BootstrapEndpointOmitsUnclassifiedOfflineOverrides(string key, bool expected)
     {
         await using var harness = await ExampleAppHarness.StartAsync();
         var reflagClient = harness.App.Services.GetRequiredService<ReflagClient>();
@@ -72,10 +72,8 @@ public sealed class ExampleAppTests
 
         Assert.Equal(2, bootstrapped.RootElement.GetProperty("protocolVersion").GetInt32());
         Assert.Equal("test-user", bootstrapped.RootElement.GetProperty("context").GetProperty("user").GetProperty("id").GetString());
-        var flag = bootstrapped.RootElement.GetProperty("flags").GetProperty(key);
-        Assert.Equal(expected, flag.GetProperty("value").GetBoolean());
-        // Overrides are not authored selections.
-        Assert.False(flag.GetProperty("resolved").GetBoolean());
+        Assert.Empty(bootstrapped.RootElement.GetProperty("flags").EnumerateObject());
+        Assert.Equal(expected, reflagClient.GetFlag(key, new ReflagContext(), new ReflagTelemetryOptions { EnableTelemetry = false }));
     }
 
     [Fact]

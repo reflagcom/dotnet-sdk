@@ -31,13 +31,20 @@ public sealed class JsonValueSerializationTests
             ["none"] = null,
         };
         var transport = new TestTransport();
-        transport.EnqueueGetFailure(new HttpRequestException("offline"));
+        if (source == "static")
+        {
+            transport.EnqueueGetFailure(new HttpRequestException("offline"));
+        }
+        else
+        {
+            transport.EnqueueGetJson(TestDefinitions.FlagsResponse(1, values.Keys.Select(key =>
+                TestDefinitions.CreateMultivariateFlag(key, "default", new Dictionary<string, object?> { ["default"] = null })).ToArray()));
+        }
         using var httpClient = transport.CreateHttpClient();
         await using var client = new ReflagClient(new ReflagClientOptions
         {
             SecretKey = "validSecretKeyWithMoreThan22Chars",
             HttpClient = httpClient,
-            Offline = source != "static",
             FlagsSyncMode = ReflagFlagsSyncMode.Polling,
             FlagsFetchRetries = 0,
             JsonFlagOverrides = source == "startup" ? values : null,
@@ -78,13 +85,22 @@ public sealed class JsonValueSerializationTests
         Assert.Equal(JsonValueKind.Null, client.GetFlag<JsonElement>("none", context, default, telemetry).ValueKind);
 
         using var bootstrap = JsonDocument.Parse(JsonSerializer.Serialize(client.GetFlagsForBootstrap(context, telemetry)));
-        var flag = bootstrap.RootElement.GetProperty("flags").GetProperty("poco");
-        Assert.Equal(JsonValueKind.Null, flag.GetProperty("value").GetProperty("name").ValueKind);
-        Assert.False(flag.GetProperty("resolved").GetBoolean());
-        Assert.False(flag.TryGetProperty("variantKey", out _));
-        Assert.False(flag.TryGetProperty("sourceVersionId", out _));
-        Assert.False(flag.TryGetProperty("matchedRuleId", out _));
-        Assert.False(bootstrap.RootElement.TryGetProperty("flagStateVersion", out _));
+        if (source == "static")
+        {
+            Assert.Empty(bootstrap.RootElement.GetProperty("flags").EnumerateObject());
+            Assert.False(bootstrap.RootElement.TryGetProperty("flagStateVersion", out _));
+        }
+        else
+        {
+            var flag = bootstrap.RootElement.GetProperty("flags").GetProperty("poco");
+            Assert.Equal(JsonValueKind.Null, flag.GetProperty("value").GetProperty("name").ValueKind);
+            Assert.Equal(JsonValueKind.Null, bootstrap.RootElement.GetProperty("flags").GetProperty("anonymous").GetProperty("value").GetProperty("nested").GetProperty("label").ValueKind);
+            Assert.False(flag.GetProperty("resolved").GetBoolean());
+            Assert.False(flag.TryGetProperty("variantKey", out _));
+            Assert.False(flag.TryGetProperty("sourceVersionId", out _));
+            Assert.False(flag.TryGetProperty("matchedRuleId", out _));
+            Assert.Equal(1, bootstrap.RootElement.GetProperty("flagStateVersion").GetInt32());
+        }
     }
 
     [Fact]

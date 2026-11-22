@@ -145,7 +145,7 @@ public sealed class EvaluationDiagnosticsTelemetryTests
         });
 
         Assert.True(client.GetFlag("flag", new ReflagContext()));
-        Assert.Empty(client.GetFlagsForBootstrap(new ReflagContext()).Flags["flag"].Errors);
+        Assert.Empty(client.GetFlagsForBootstrap(new ReflagContext()).Flags);
         await client.FlushAsync();
         Assert.DoesNotContain(logger.Entries, entry => entry.Level == LogLevel.Error);
         Assert.Empty(transport.GetCalls);
@@ -182,6 +182,7 @@ public sealed class EvaluationDiagnosticsTelemetryTests
     private static object BooleanFlag(string key, object filter) => new
     {
         key,
+        secret = false,
         sourceVersionId = $"{key}:v1",
         variants = new { on = true, off = false },
         rules = new object[]
