@@ -28,6 +28,7 @@ public sealed class ReflagEndToEndTests
                     new
                     {
                         key = "new-dashboard",
+                        secret = false,
                         description = "Roll out the new dashboard",
                         targeting = new
                         {
@@ -126,6 +127,7 @@ public sealed class ReflagEndToEndTests
                     new
                     {
                         key = "f-1",
+                        secret = false,
                         description = (string?)null,
                         stage = "In development",
                         targeting = new

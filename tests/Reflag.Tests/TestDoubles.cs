@@ -148,6 +148,7 @@ internal static class TestDefinitions
         return new FlagDefinition
         {
             Key = key,
+            Secret = false,
             Description = description,
             Targeting = new FlagTargetingDefinition
             {

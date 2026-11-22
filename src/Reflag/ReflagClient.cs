@@ -181,7 +181,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _ = SyncContextAsync(normalizedContext, normalizedTelemetry);
-        var definitions = GetDefinitionsForLocalEvaluation();
+        var definitions = GetDefinitionsForLocalEvaluation(out _);
         var rawFlag = EvaluateFlag(key, normalizedContext, definitions);
 
         WarnFlagEvaluationDiagnostics(rawFlag);
@@ -189,6 +189,7 @@ public sealed class ReflagClient : IAsyncDisposable
         return rawFlag.Value;
     }
 
+    /// <summary>Exports only explicitly public flags. Missing visibility metadata is server-only.</summary>
     public ReflagBootstrappedFlags GetFlagsForBootstrap(
         ReflagContext context,
         ReflagTelemetryOptions? telemetryOptions = null)
@@ -203,14 +204,14 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _ = SyncContextAsync(normalizedContext, normalizedTelemetry);
-        var definitions = GetDefinitionsForLocalEvaluation();
+        var definitions = GetDefinitionsForLocalEvaluation(out var flagStateVersion);
         var flags = EvaluateFlagsForBootstrap(normalizedContext, definitions);
 
         return new ReflagBootstrappedFlags
         {
             Context = normalizedContext,
             Flags = flags,
-            FlagStateVersion = _flagsCache.GetFlagStateVersion(),
+            FlagStateVersion = flagStateVersion,
         };
     }
 
@@ -571,15 +572,18 @@ public sealed class ReflagClient : IAsyncDisposable
         _initializationFinished = true;
     }
 
-    private CompiledFlagDefinition[] GetDefinitionsForLocalEvaluation()
+    private CompiledFlagDefinition[] GetDefinitionsForLocalEvaluation(out int? flagStateVersion)
     {
+        flagStateVersion = null;
         if (_config.Offline)
         {
             return Array.Empty<CompiledFlagDefinition>();
         }
 
         _flagsSyncController.OnAccess();
-        var definitions = _flagsCache.Get();
+        var snapshot = _flagsCache.GetSnapshot();
+        flagStateVersion = snapshot.FlagStateVersion;
+        var definitions = snapshot.Definitions;
         if (definitions is null)
         {
             _logger.LogWarning("no flag definitions available, using fallback flags.");
@@ -638,6 +642,10 @@ public sealed class ReflagClient : IAsyncDisposable
     {
         var evaluationObject = ReflagContextNormalizer.ToEvaluationObject(context);
         var result = new Dictionary<string, RawReflagFlag>(StringComparer.Ordinal);
+        // Keep visibility tied to these definitions even if an override callback refreshes the cache.
+        var publicKeys = new HashSet<string>(
+            definitions.Where(definition => !definition.Definition.Secret).Select(definition => definition.Definition.Key),
+            StringComparer.Ordinal);
 
         foreach (var definition in definitions)
         {
@@ -662,7 +670,8 @@ public sealed class ReflagClient : IAsyncDisposable
             };
         }
 
-        return result;
+        return result.Where(pair => publicKeys.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
     }
 
     private IReadOnlyDictionary<string, bool> GetFlagOverrides(ReflagContext context)

@@ -285,7 +285,7 @@ public sealed class ReflagClientTests
         var bootstrapped = client.GetFlagsForBootstrap(new ReflagContext());
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["forced-flag"].Value);
+        Assert.Empty(bootstrapped.Flags);
         Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Error && entry.Message.Contains("flag access: ReflagClient is not initialized yet."));
     }
@@ -357,7 +357,7 @@ public sealed class ReflagClientTests
         var definitions = client.GetFlagDefinitions();
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["fallback-flag"].Value);
+        Assert.Empty(bootstrapped.Flags);
         Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Single(definitions);
         Assert.Equal(0, definitions[0].Targeting.Version);

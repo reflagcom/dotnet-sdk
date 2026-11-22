@@ -119,7 +119,8 @@ public sealed class ArrayEvaluationTests
         var error = Assert.Single(result.Errors);
         Assert.Equal("MISSING_CONTEXT_FIELD", error.Code);
         Assert.Null(error.Operator);
-        Assert.False(JsonDocument.Parse(JsonSerializer.Serialize(error)).RootElement.TryGetProperty("operator", out _));
+        using var serialized = JsonDocument.Parse(JsonSerializer.Serialize(error));
+        Assert.False(serialized.RootElement.TryGetProperty("operator", out _));
     }
 
     [Fact]
