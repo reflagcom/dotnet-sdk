@@ -54,14 +54,7 @@ public sealed class StartupOverridesTests
             Assert.Equal("node", client.GetFlag<JsonElement>("node", new ReflagContext(), default).GetProperty("name").GetString());
             Assert.Equal("element", client.GetFlag<JsonElement>("element", new ReflagContext(), default).GetProperty("name").GetString());
             Assert.Equal(new[] { "one", "two" }, client.GetFlag("tags", new ReflagContext(), Array.Empty<string>()));
-            Assert.All(client.GetFlagsForBootstrap(new ReflagContext()).Flags.Values, flag =>
-            {
-                Assert.False(flag.Resolved);
-                Assert.Null(flag.VariantKey);
-                Assert.Null(flag.SourceVersionId);
-                Assert.Empty(flag.RuleResults);
-                Assert.Empty(flag.Errors);
-            });
+            Assert.Empty(client.GetFlagsForBootstrap(new ReflagContext()).Flags);
         }
     }
 

@@ -279,8 +279,7 @@ public sealed class ReflagClientTests
         var bootstrapped = client.GetFlagsForBootstrap(new ReflagContext());
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["forced-flag"].Value!.Value.GetBoolean());
-        Assert.False(bootstrapped.Flags["forced-flag"].Resolved);
+        Assert.Empty(bootstrapped.Flags);
         Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Error && entry.Message.Contains("flag access: ReflagClient is not initialized yet."));
     }
@@ -352,10 +351,8 @@ public sealed class ReflagClientTests
         var definitions = client.GetFlagDefinitions();
 
         Assert.True(enabled);
-        Assert.True(bootstrapped.Flags["fallback-flag"].Value!.Value.GetBoolean());
-        // Static values do not identify authored variants.
-        Assert.False(bootstrapped.Flags["fallback-flag"].Resolved);
-        Assert.Null(bootstrapped.Flags["fallback-flag"].VariantKey);
+        // Static values have no public visibility metadata.
+        Assert.Empty(bootstrapped.Flags);
         Assert.Null(bootstrapped.FlagStateVersion);
         Assert.Equal("static:fallback-flag", Assert.Single(definitions.Flags).SourceVersionId);
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("remote flags unavailable, using fallback flags fetched"));
