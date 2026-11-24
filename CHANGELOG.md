@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/reflagcom/dotnet-sdk/compare/v0.3.0...v0.3.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* keep server-only flags out of protocol-v2 bootstrap ([#21](https://github.com/reflagcom/dotnet-sdk/issues/21)) ([6a749fb](https://github.com/reflagcom/dotnet-sdk/commit/6a749fb9fd3a9078b8250b6a18c1e7370860aadc))
+
 ## [0.3.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.2.0...v0.3.0) (2026-11-17)
 
 
