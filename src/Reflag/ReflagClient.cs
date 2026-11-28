@@ -6,11 +6,15 @@ using Reflag.Internal;
 
 namespace Reflag;
 
+/// <summary>
+/// The Reflag server SDK client. Create one long-lived instance, call <see cref="InitializeAsync" /> once,
+/// and reuse it for flag evaluation and tracking.
+/// </summary>
 public sealed class ReflagClient : IAsyncDisposable
 {
     private static readonly ReflagEvaluationError ClientNotInitializedError = new()
     {
-        Code = "CLIENT_NOT_INITIALIZED",
+        Code = ReflagEvaluationErrorCodes.ClientNotInitialized,
         Field = string.Empty,
         Message = "ReflagClient was not initialized before this flag was evaluated. Call InitializeAsync() before evaluating flags.",
     };
@@ -43,7 +47,14 @@ public sealed class ReflagClient : IAsyncDisposable
     private bool _shutdownFlushCompleted;
     private bool _canLoadFlagsFallbackProvider = true;
 
+    /// <summary>Creates a client. Options not set here fall back to <c>REFLAG_*</c> environment variables.</summary>
+    /// <exception cref="ArgumentException">No secret key was found and <see cref="ReflagClientOptions.Offline" /> is not set, or an option is invalid.</exception>
     public ReflagClient(ReflagClientOptions? options = null)
+        : this(options, defaultLogger: null)
+    {
+    }
+
+    internal ReflagClient(ReflagClientOptions? options, ILogger? defaultLogger)
     {
         options ??= new ReflagClientOptions();
         ValidateOptions(options);
@@ -55,12 +66,16 @@ public sealed class ReflagClient : IAsyncDisposable
         {
             if (secretKey is null)
             {
-                throw new ArgumentNullException(nameof(options), "options.SecretKey must be provided unless offline is true.");
+                throw new ArgumentException(
+                    "No Reflag secret key was found. Set ReflagClientOptions.SecretKey or the REFLAG_SECRET_KEY environment variable, or set Offline = true to run without one (for example in tests).",
+                    nameof(options));
             }
 
             if (secretKey.Length <= 22)
             {
-                throw new ArgumentException("invalid options.SecretKey specified", nameof(options));
+                throw new ArgumentException(
+                    "The Reflag secret key is too short to be valid. Copy the secret key from your environment's settings in the Reflag app.",
+                    nameof(options));
             }
         }
 
@@ -82,7 +97,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
         var secretKeyHash = secretKey is null ? string.Empty : Hashing.HashString(secretKey);
         var flagsPushUrl = ResolveFlagsPushUrl(options.FlagsPushUrl);
-        _logger = options.Logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        _logger = options.Logger ?? defaultLogger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 
         // Normalize startup values before creating owned transport resources; serialization can fail.
         _baseFlagOverrides = BuildBaseFlagOverrides(envConfig.FlagOverrides, options);
@@ -132,6 +147,10 @@ public sealed class ReflagClient : IAsyncDisposable
         };
     }
 
+    /// <summary>
+    /// Fetches flag definitions and starts background sync. Call once before evaluating flags.
+    /// Concurrent and repeated calls share the same initialization.
+    /// </summary>
     public Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         EnsureNotDisposed();
@@ -140,12 +159,16 @@ public sealed class ReflagClient : IAsyncDisposable
         return AsyncHelpers.WaitAsync(initializeTask, cancellationToken);
     }
 
+    /// <summary>Sends any buffered tracking events now.</summary>
     public Task FlushAsync(CancellationToken cancellationToken = default)
     {
         EnsureNotDisposed();
         return FlushCoreAsync(cancellationToken);
     }
 
+    /// <summary>Fetches the latest flag definitions.</summary>
+    /// <param name="waitForVersion">If set, keeps refreshing until at least this flag state version is available.</param>
+    /// <param name="cancellationToken">Cancels the refresh.</param>
     public async Task RefreshFlagsAsync(int? waitForVersion = null, CancellationToken cancellationToken = default)
     {
         EnsureNotDisposed();
@@ -304,6 +327,46 @@ public sealed class ReflagClient : IAsyncDisposable
         };
     }
 
+    /// <summary>Reads a Boolean flag for an anonymous-object or dictionary context. See <see cref="ReflagContext.From" />.</summary>
+    public bool GetFlag(
+        string key,
+        object context,
+        ReflagTelemetryOptions? telemetryOptions = null)
+    {
+        EnsureNotDisposed();
+        return GetFlag(key, ReflagContextNormalizer.NormalizeLooseContext(context), telemetryOptions);
+    }
+
+    /// <summary>Reads a flag value for an anonymous-object or dictionary context. See <see cref="ReflagContext.From" />.</summary>
+    public T GetFlag<T>(
+        string key,
+        object context,
+        T defaultValue,
+        ReflagTelemetryOptions? telemetryOptions = null)
+    {
+        EnsureNotDisposed();
+        return GetFlag(key, ReflagContextNormalizer.NormalizeLooseContext(context), defaultValue, telemetryOptions);
+    }
+
+    /// <summary>Evaluates all flags for an anonymous-object or dictionary context. See <see cref="ReflagContext.From" />.</summary>
+    public IReadOnlyDictionary<string, JsonElement?> GetFlags(
+        object context,
+        ReflagTelemetryOptions? telemetryOptions = null)
+    {
+        EnsureNotDisposed();
+        return GetFlags(ReflagContextNormalizer.NormalizeLooseContext(context), telemetryOptions);
+    }
+
+    /// <summary>Builds a bootstrap payload for an anonymous-object or dictionary context. See <see cref="ReflagContext.From" />.</summary>
+    public ReflagBootstrappedFlags GetFlagsForBootstrap(
+        object context,
+        ReflagTelemetryOptions? telemetryOptions = null)
+    {
+        EnsureNotDisposed();
+        return GetFlagsForBootstrap(ReflagContextNormalizer.NormalizeLooseContext(context), telemetryOptions);
+    }
+
+    /// <summary>Returns a client bound to a context, so later calls do not need to pass it.</summary>
     public ReflagBoundClient BindClient(
         ReflagContext context,
         ReflagTelemetryOptions? telemetryOptions = null)
@@ -314,6 +377,7 @@ public sealed class ReflagClient : IAsyncDisposable
         return CreateBoundClient(normalizedContext, normalizedTelemetry);
     }
 
+    /// <summary>Returns a client bound to an anonymous-object or dictionary context. See <see cref="ReflagContext.From" />.</summary>
     public ReflagBoundClient BindClient(
         object context,
         ReflagTelemetryOptions? telemetryOptions = null)
@@ -324,6 +388,7 @@ public sealed class ReflagClient : IAsyncDisposable
         return CreateBoundClient(normalizedContext, normalizedTelemetry);
     }
 
+    /// <summary>Sends user attributes to Reflag.</summary>
     public async Task UpdateUserAsync(
         string userId,
         ReflagTrackOptions? options = null,
@@ -361,6 +426,7 @@ public sealed class ReflagClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Sends company attributes to Reflag, optionally associating a user with the company.</summary>
     public async Task UpdateCompanyAsync(
         string companyId,
         ReflagCompanyTrackOptions? options = null,
@@ -404,6 +470,7 @@ public sealed class ReflagClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Tracks a custom event for a user.</summary>
     public async Task TrackAsync(
         string userId,
         string eventName,
@@ -437,6 +504,7 @@ public sealed class ReflagClient : IAsyncDisposable
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Replaces the base flag overrides with Boolean values.</summary>
     public void SetFlagOverrides(IReadOnlyDictionary<string, bool> overrides)
     {
         EnsureNotDisposed();
@@ -454,6 +522,7 @@ public sealed class ReflagClient : IAsyncDisposable
         SetFlagOverridesCore(_ => normalized);
     }
 
+    /// <summary>Replaces the base flag overrides with Boolean values computed per context.</summary>
     public void SetFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
     {
         EnsureNotDisposed();
@@ -469,6 +538,7 @@ public sealed class ReflagClient : IAsyncDisposable
         SetFlagOverridesCore(FlagValueConversion.ToJsonOverridesFactory(overridesFactory));
     }
 
+    /// <summary>Adds a temporary layer of Boolean overrides on top of the base overrides. Dispose the result to remove it.</summary>
     public IDisposable PushFlagOverrides(IReadOnlyDictionary<string, bool> overrides)
     {
         EnsureNotDisposed();
@@ -486,6 +556,7 @@ public sealed class ReflagClient : IAsyncDisposable
         return PushFlagOverridesCore(_ => normalized);
     }
 
+    /// <summary>Adds a temporary layer of Boolean overrides computed per context. Dispose the result to remove it.</summary>
     public IDisposable PushFlagOverrides(Func<ReflagContext, IReadOnlyDictionary<string, bool>> overridesFactory)
     {
         EnsureNotDisposed();
@@ -501,6 +572,7 @@ public sealed class ReflagClient : IAsyncDisposable
         return PushFlagOverridesCore(FlagValueConversion.ToJsonOverridesFactory(overridesFactory));
     }
 
+    /// <summary>Clears the base overrides. Pushed layers are not affected.</summary>
     public void ClearFlagOverrides()
     {
         EnsureNotDisposed();
@@ -511,6 +583,7 @@ public sealed class ReflagClient : IAsyncDisposable
         }
     }
 
+    /// <summary>Stops background sync and, unless disabled with <see cref="ReflagBatchOptions.FlushOnExit" />, flushes buffered events.</summary>
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -727,9 +800,9 @@ public sealed class ReflagClient : IAsyncDisposable
         string? key)
     {
         var evaluatedBeforeInitialization = !_initializationFinished && !_config.Offline;
-        if (evaluatedBeforeInitialization)
+        if (evaluatedBeforeInitialization && _rateLimiter.IsAllowed("client-not-initialized-warning"))
         {
-            _logger.LogError("flag access: ReflagClient is not initialized yet.");
+            _logger.LogError("flag access: ReflagClient is not initialized yet. Call InitializeAsync() before evaluating flags.");
         }
 
         _ = SyncContextAsync(context, telemetryOptions);
@@ -1103,11 +1176,9 @@ public sealed class ReflagClient : IAsyncDisposable
         }
 
         _logger.LogWarning(
-            "flag targeting rules could not be fully evaluated. {EvaluationErrors}",
-            new Dictionary<string, IReadOnlyList<ReflagEvaluationError>>
-            {
-                [flag.FlagKey] = flag.Errors,
-            });
+            "flag \"{FlagKey}\": targeting rules could not be fully evaluated: {EvaluationErrors}",
+            flag.FlagKey,
+            string.Join("; ", flag.Errors.Select(error => error.Message)));
     }
 
     private void TryQueueCheckEvent(
@@ -1808,6 +1879,7 @@ public sealed class ReflagClient : IAsyncDisposable
 
 }
 
+/// <summary>A client bound to a context. Create one with <see cref="ReflagClient.BindClient(ReflagContext, ReflagTelemetryOptions?)" />.</summary>
 public sealed class ReflagBoundClient
 {
     private readonly ReflagClient _rootClient;

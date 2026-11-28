@@ -11,10 +11,10 @@ namespace Reflag.Internal;
 /// </summary>
 internal sealed class FlagCollectionEvaluator
 {
-    private const string MissingContextField = "MISSING_CONTEXT_FIELD";
-    private const string UnsupportedArrayOperator = "UNSUPPORTED_ARRAY_OPERATOR";
-    private const string InvalidComparison = "INVALID_COMPARISON";
-    private const string InvalidFlagDefinition = "INVALID_FLAG_DEFINITION";
+    private const string MissingContextField = ReflagEvaluationErrorCodes.MissingContextField;
+    private const string UnsupportedArrayOperator = ReflagEvaluationErrorCodes.UnsupportedArrayOperator;
+    private const string InvalidComparison = ReflagEvaluationErrorCodes.InvalidComparison;
+    private const string InvalidFlagDefinition = ReflagEvaluationErrorCodes.InvalidFlagDefinition;
     private const string InvalidKey = "invalid";
 
     private readonly Dictionary<string, PreparedFlag> _flags = new(StringComparer.Ordinal);

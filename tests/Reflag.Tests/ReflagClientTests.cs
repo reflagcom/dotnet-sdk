@@ -386,4 +386,86 @@ public sealed class ReflagClientTests
     {
         return Assert.ThrowsAsync<ObjectDisposedException>(action);
     }
+
+    [Fact]
+    public async Task AddReflag_uses_the_host_logger_factory_when_no_logger_is_configured()
+    {
+        var logger = new TestLogger();
+        var services = new ServiceCollection();
+        services.AddSingleton<ILoggerFactory>(new SingleLoggerFactory(logger));
+        services.AddReflag(new ReflagClientOptions { Offline = true });
+
+        await using var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<ReflagClient>();
+        await client.InitializeAsync();
+
+        Assert.NotEmpty(logger.Entries);
+    }
+
+    [Fact]
+    public void Evaluating_before_initialize_logs_the_error_once_per_window()
+    {
+        var logger = new TestLogger();
+        var client = new ReflagClient(new ReflagClientOptions
+        {
+            SecretKey = "validSecretKeyWithMoreThan22Chars",
+            Logger = logger,
+        });
+
+        client.GetFlag("a", new ReflagContext());
+        client.GetFlag("b", new ReflagContext());
+        client.GetFlagsForBootstrap(new ReflagContext());
+
+        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Error && entry.Message.Contains("not initialized yet"));
+    }
+
+    [Fact]
+    public void Flag_reads_accept_loose_contexts()
+    {
+        var client = new ReflagClient(new ReflagClientOptions
+        {
+            Offline = true,
+            FlagOverridesFactory = context => new Dictionary<string, bool>
+            {
+                ["qa-flag"] = context.User?.Id == "qa-user",
+            },
+        });
+
+        var context = new { User = new { Id = "qa-user", Plan = "pro" } };
+
+        Assert.True(client.GetFlag("qa-flag", context));
+        Assert.True(client.GetFlag("qa-flag", context, false));
+        Assert.True(client.GetFlags(context)["qa-flag"]?.GetBoolean());
+        Assert.Equal("pro", client.GetFlagsForBootstrap(context).Context.User?.Attributes["Plan"]?.ToString());
+    }
+
+    [Fact]
+    public void Constructor_explains_how_to_provide_a_missing_secret_key()
+    {
+        var previous = Environment.GetEnvironmentVariable("REFLAG_SECRET_KEY");
+        Environment.SetEnvironmentVariable("REFLAG_SECRET_KEY", null);
+        try
+        {
+            var error = Assert.Throws<ArgumentException>(() => new ReflagClient(new ReflagClientOptions()));
+            Assert.Contains("REFLAG_SECRET_KEY", error.Message);
+            Assert.Contains("Offline", error.Message);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("REFLAG_SECRET_KEY", previous);
+        }
+    }
+
+    private sealed class SingleLoggerFactory(ILogger logger) : ILoggerFactory
+    {
+        public ILogger CreateLogger(string categoryName) => logger;
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+    }
 }

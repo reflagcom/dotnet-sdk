@@ -52,7 +52,7 @@ public sealed class EvaluationDiagnosticsTelemetryTests
 
         var healthy = payload.RootElement.EnumerateArray().Single(item => item.GetProperty("key").GetString() == "healthy");
         Assert.False(healthy.TryGetProperty("evalErrors", out _));
-        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules"));
+        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("targeting rules could not be fully evaluated"));
     }
 
     [Theory]
@@ -82,6 +82,34 @@ public sealed class EvaluationDiagnosticsTelemetryTests
         Assert.Equal("ReflagClient was not initialized before this flag was evaluated. Call InitializeAsync() before evaluating flags.", error.GetProperty("message").GetString());
         Assert.False(error.TryGetProperty("operator", out _));
         Assert.Contains(logger.Entries, entry => entry.Level == LogLevel.Error && entry.Message.Contains("not initialized"));
+    }
+
+    [Fact]
+    public async Task Initialization_state_is_part_of_check_event_deduplication()
+    {
+        var transport = new TestTransport();
+        transport.EnqueueGetJson("{\"success\":true,\"protocolVersion\":2,\"flagStateVersion\":1,\"flags\":[],\"segments\":[]}");
+        await using var client = new ReflagClient(new ReflagClientOptions
+        {
+            SecretKey = "validSecretKeyWithMoreThan22Chars",
+            HttpClient = transport.CreateHttpClient(),
+            FlagsSyncMode = ReflagFlagsSyncMode.Polling,
+            FlagsFetchRetries = 0,
+            FlagOverrides = new Dictionary<string, bool> { ["flag"] = true },
+        });
+
+        Assert.True(client.GetFlag("flag", new ReflagContext()));
+        await client.InitializeAsync();
+        Assert.True(client.GetFlag("flag", new ReflagContext()));
+        await client.FlushAsync();
+
+        using var payload = JsonDocument.Parse(Assert.Single(transport.PostCalls).Body);
+        var checks = payload.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, checks.Length);
+        Assert.Equal(
+            ReflagEvaluationErrorCodes.ClientNotInitialized,
+            Assert.Single(checks[0].GetProperty("evalErrors").EnumerateArray()).GetProperty("code").GetString());
+        Assert.False(checks[1].TryGetProperty("evalErrors", out _));
     }
 
     [Fact]

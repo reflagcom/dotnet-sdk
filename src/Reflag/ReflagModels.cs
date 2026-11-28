@@ -27,22 +27,31 @@ public sealed class ReflagBatchOptions
     public bool? FlushOnExit { get; init; }
 }
 
+/// <summary>Options for <see cref="ReflagClient" />. Unset options fall back to environment variables, then defaults.</summary>
 public sealed class ReflagClientOptions
 {
+    /// <summary>The environment secret key. Defaults to <c>REFLAG_SECRET_KEY</c>. Required unless <see cref="Offline" /> is set.</summary>
     public string? SecretKey { get; init; }
 
+    /// <summary>The Reflag API base URL. Defaults to <c>REFLAG_API_BASE_URL</c>, then <c>https://front.reflag.com</c>.</summary>
     public Uri? ApiBaseUrl { get; init; }
 
+    /// <summary>The logger. Defaults to the host's <c>ILoggerFactory</c> when registered with <c>AddReflag</c>, otherwise no logging.</summary>
     public ILogger? Logger { get; init; }
 
+    /// <summary>The HTTP client used for API requests and push sync.</summary>
     public HttpClient? HttpClient { get; init; }
 
+    /// <summary>Durable storage for the last fetched flag definitions, used if Reflag is unavailable at startup. Ignored in offline mode.</summary>
     public IFlagsFallbackProvider? FlagsFallbackProvider { get; init; }
 
+    /// <summary>Timeout for flag definition requests. Defaults to 10 seconds.</summary>
     public TimeSpan? FetchTimeout { get; init; }
 
+    /// <summary>Retries for flag definition requests. Defaults to 3.</summary>
     public int? FlagsFetchRetries { get; init; }
 
+    /// <summary>Tracking event batching options.</summary>
     public ReflagBatchOptions? Batch { get; init; }
 
     /// <summary>Base Boolean overrides. Specify at most one of the four override options.</summary>
@@ -65,10 +74,13 @@ public sealed class ReflagClientOptions
     /// </summary>
     public Func<ReflagContext, IReadOnlyDictionary<string, object?>>? JsonFlagOverridesFactory { get; init; }
 
+    /// <summary>Disables all network I/O. Defaults to <c>REFLAG_OFFLINE</c>. Useful in tests.</summary>
     public bool? Offline { get; init; }
 
+    /// <summary>How flag definitions are kept fresh. Defaults to <see cref="ReflagFlagsSyncMode.Push" />.</summary>
     public ReflagFlagsSyncMode? FlagsSyncMode { get; init; }
 
+    /// <summary>Overrides the push sync endpoint.</summary>
     public Uri? FlagsPushUrl { get; init; }
 }
 

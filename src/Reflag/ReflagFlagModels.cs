@@ -15,13 +15,29 @@ public sealed class ReflagEvaluationErrorSource
     public string Key { get; init; } = string.Empty;
 }
 
+/// <summary>The values of <see cref="ReflagEvaluationError.Code" />.</summary>
+public static class ReflagEvaluationErrorCodes
+{
+    /// <summary>A context field required by a targeting rule was missing.</summary>
+    public const string MissingContextField = "MISSING_CONTEXT_FIELD";
+
+    /// <summary>An operator that does not support arrays was applied to an array-valued context field.</summary>
+    public const string UnsupportedArrayOperator = "UNSUPPORTED_ARRAY_OPERATOR";
+
+    /// <summary>A context value or targeting comparison value could not be compared with the rule's operator.</summary>
+    public const string InvalidComparison = "INVALID_COMPARISON";
+
+    /// <summary>The flag definition is invalid or uses something this SDK version does not support.</summary>
+    public const string InvalidFlagDefinition = "INVALID_FLAG_DEFINITION";
+
+    /// <summary>The flag was evaluated before <c>InitializeAsync()</c> completed.</summary>
+    public const string ClientNotInitialized = "CLIENT_NOT_INITIALIZED";
+}
+
 /// <summary>A non-fatal flag evaluation diagnostic.</summary>
 public sealed class ReflagEvaluationError
 {
-    /// <summary>
-    /// <c>MISSING_CONTEXT_FIELD</c>, <c>UNSUPPORTED_ARRAY_OPERATOR</c>, <c>INVALID_COMPARISON</c>,
-    /// <c>INVALID_FLAG_DEFINITION</c> or <c>CLIENT_NOT_INITIALIZED</c>.
-    /// </summary>
+    /// <summary>One of the <see cref="ReflagEvaluationErrorCodes" /> values.</summary>
     [JsonPropertyName("code")]
     public string Code { get; init; } = string.Empty;
 
