@@ -85,6 +85,34 @@ public sealed class EvaluationDiagnosticsTelemetryTests
     }
 
     [Fact]
+    public async Task Initialization_state_is_part_of_check_event_deduplication()
+    {
+        var transport = new TestTransport();
+        transport.EnqueueGetJson("{\"success\":true,\"protocolVersion\":2,\"flagStateVersion\":1,\"flags\":[],\"segments\":[]}");
+        await using var client = new ReflagClient(new ReflagClientOptions
+        {
+            SecretKey = "validSecretKeyWithMoreThan22Chars",
+            HttpClient = transport.CreateHttpClient(),
+            FlagsSyncMode = ReflagFlagsSyncMode.Polling,
+            FlagsFetchRetries = 0,
+            FlagOverrides = new Dictionary<string, bool> { ["flag"] = true },
+        });
+
+        Assert.True(client.GetFlag("flag", new ReflagContext()));
+        await client.InitializeAsync();
+        Assert.True(client.GetFlag("flag", new ReflagContext()));
+        await client.FlushAsync();
+
+        using var payload = JsonDocument.Parse(Assert.Single(transport.PostCalls).Body);
+        var checks = payload.RootElement.EnumerateArray().ToArray();
+        Assert.Equal(2, checks.Length);
+        Assert.Equal(
+            ReflagEvaluationErrorCodes.ClientNotInitialized,
+            Assert.Single(checks[0].GetProperty("evalErrors").EnumerateArray()).GetProperty("code").GetString());
+        Assert.False(checks[1].TryGetProperty("evalErrors", out _));
+    }
+
+    [Fact]
     public async Task Initialization_diagnostic_is_appended_to_check_errors_but_not_bootstrap_errors()
     {
         var transport = new TestTransport();
