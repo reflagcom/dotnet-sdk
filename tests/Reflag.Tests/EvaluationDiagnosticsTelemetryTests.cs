@@ -52,7 +52,7 @@ public sealed class EvaluationDiagnosticsTelemetryTests
 
         var healthy = payload.RootElement.EnumerateArray().Single(item => item.GetProperty("key").GetString() == "healthy");
         Assert.False(healthy.TryGetProperty("evalErrors", out _));
-        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules"));
+        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("targeting rules could not be fully evaluated"));
     }
 
     [Theory]

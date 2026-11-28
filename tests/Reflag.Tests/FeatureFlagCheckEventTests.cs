@@ -270,7 +270,7 @@ public sealed class FeatureFlagCheckEventTests
         }, new ReflagTelemetryOptions { EnableTelemetry = false }));
 
         var warningEntries = logger.Entries
-            .Where(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules could not be fully evaluated."))
+            .Where(entry => entry.Level == LogLevel.Warning && entry.Message.Contains("targeting rules could not be fully evaluated"))
             .ToList();
 
         Assert.Single(warningEntries);
@@ -329,7 +329,7 @@ public sealed class FeatureFlagCheckEventTests
         }
 
         Assert.False(item.TryGetProperty("evalMissingFields", out _));
-        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("flag targeting rules"));
+        Assert.Single(logger.Entries, entry => entry.Level == LogLevel.Warning && entry.Message.Contains("targeting rules could not be fully evaluated"));
     }
 
     private static List<JsonElement> ToJsonArray(string body)

@@ -34,7 +34,7 @@ using Reflag;
 await using var client = new ReflagClient();
 await client.InitializeAsync();
 
-var context = ReflagContext.From(new
+var context = new
 {
     User = new
     {
@@ -51,7 +51,7 @@ var context = ReflagContext.From(new
     {
         Device = "Desktop",
     },
-});
+};
 
 var enabled = client.GetFlag("new-dashboard", context);
 
@@ -61,7 +61,7 @@ if (enabled)
 }
 ```
 
-`ReflagContext.From(...)` accepts anonymous objects or nested dictionaries. Well-known fields like `Id`, `Name`, `Email`, and `Avatar` are mapped directly; additional fields become attributes.
+Flag reads and `BindClient(...)` accept a typed `ReflagContext`, an anonymous object, or nested dictionaries. Well-known fields like `Id`, `Name`, `Email`, and `Avatar` are mapped directly; additional fields become attributes. `ReflagContext.From(...)` does the same conversion if you need a `ReflagContext`.
 
 If you evaluate multiple flags for the same context, for example in middleware or request-scoped helpers, bind that context once and reuse the bound client:
 
@@ -134,6 +134,10 @@ Primitive elements are normalized to strings (null becomes `""`); composite elem
 
 Numeric, date, boolean, percentage-rollout, and percentage-distribution operators do not support arrays.
 
+### Failed evaluations
+
+If a targeting rule can't be evaluated, for example because a required context field is missing or has the wrong type, the SDK treats that rule as not matching, logs a warning, and reports the failure to Reflag. You can view failed evaluations in the Reflag app.
+
 ## Fallback provider
 
 `FlagsFallbackProvider` is a reliability feature for startup fallback and outage recovery.
@@ -143,7 +147,7 @@ If you do not configure a fallback provider, the SDK still uses live definitions
 
 Reflag remains the source of truth. In the normal case, the SDK fetches live definitions and then saves an updated snapshot through the fallback provider. The fallback copy is only used when that initial live fetch is unavailable.
 
-Built-in providers currently available in the .NET package:
+Built-in providers:
 
 - `ReflagFallbackProviders.Static(...)`
 - `ReflagFallbackProviders.File(...)`
@@ -220,7 +224,7 @@ var bootstrapped = bound.GetFlagsForBootstrap();
 
 ## Configuring
 
-The .NET SDK currently supports configuration through:
+The .NET SDK is configured through:
 
 1. constructor options
 2. environment variables
@@ -246,13 +250,13 @@ export REFLAG_FLAGS_ENABLED=demo-flag
 export REFLAG_FLAGS_DISABLED=new-dashboard
 ```
 
-Constructor options currently available:
+Constructor options:
 
 | Option | Type | Notes | Env var |
 | --- | --- | --- | --- |
 | `SecretKey` | `string?` | Required unless `Offline == true` | `REFLAG_SECRET_KEY` |
 | `ApiBaseUrl` | `Uri?` | Absolute URI | `REFLAG_API_BASE_URL` |
-| `Logger` | `ILogger?` | Defaults to `NullLogger.Instance` | - |
+| `Logger` | `ILogger?` | Defaults to the host's `ILoggerFactory` with `AddReflag(...)`, otherwise no logging | - |
 | `HttpClient` | `HttpClient?` | Customize the built-in HTTP transport used for requests and push sync | - |
 | `FlagsFallbackProvider` | `IFlagsFallbackProvider?` | Ignored in offline mode | - |
 | `FetchTimeout` | `TimeSpan?` | Default `10s` | - |
@@ -268,120 +272,40 @@ Constructor options currently available:
 
 Specify at most one of `FlagOverrides`, `FlagOverridesFactory`, `JsonFlagOverrides`, or `JsonFlagOverridesFactory`.
 
-## Testing with flag overrides
-
-The SDK has first-class override APIs for tests and local development.
-In tests, you will often want to run the client in offline mode:
+## Overrides and tests
 
 ```csharp
 await using var client = new ReflagClient(new ReflagClientOptions
 {
     Offline = true,
+    FlagOverrides = new Dictionary<string, bool> { ["new-editor"] = true },
 });
-```
+await client.InitializeAsync();
 
-### Base overrides
+client.SetFlagOverrides(new Dictionary<string, bool> { ["new-dashboard"] = true });
 
-Set base overrides in the constructor, replace them later with `SetFlagOverrides(...)`, and clear them with `ClearFlagOverrides()`:
-
-```csharp
-await using var client = new ReflagClient(new ReflagClientOptions
+using (client.PushFlagOverrides(context => new Dictionary<string, bool>
 {
-    Offline = true,
-    FlagOverrides = new Dictionary<string, bool>
-    {
-        ["demo-flag"] = true,
-    },
-});
-
-client.SetFlagOverrides(new Dictionary<string, bool>
+    ["smart-summaries"] = context.Company?.Id == "qa",
+}))
 {
-    ["demo-flag"] = false,
-});
+    // the pushed layer applies until it is disposed
+}
 
 client.ClearFlagOverrides();
 ```
 
-### Layering overrides
-
-`PushFlagOverrides(...)` adds a temporary layer on top of the base overrides and returns an `IDisposable` scope.
-The override is active until that scope is disposed.
+Multivariate flags take JSON values through `JsonFlagOverrides` or the `Dictionary<string, object?>` overloads:
 
 ```csharp
-await using var client = new ReflagClient(new ReflagClientOptions
+client.SetFlagOverrides(new Dictionary<string, object?>
 {
-    Offline = true,
-});
-
-Assert.False(client.GetFlag("new-dashboard", new ReflagContext()));
-
-using (client.PushFlagOverrides(new Dictionary<string, bool>
-{
-    ["new-dashboard"] = true,
-}))
-{
-    Assert.True(client.GetFlag("new-dashboard", new ReflagContext()));
-}
-
-Assert.False(client.GetFlag("new-dashboard", new ReflagContext()));
-```
-
-The precedence is:
-
-1. base overrides from the constructor or `SetFlagOverrides(...)`
-2. temporary layers added by `PushFlagOverrides(...)`
-
-### Context dependent overrides
-
-`SetFlagOverrides(...)` and `PushFlagOverrides(...)` also accept a function:
-
-```csharp
-using (client.PushFlagOverrides(context => new Dictionary<string, bool>
-{
-    ["smart-summaries"] = context.User?.Id == "qa-user",
-}))
-{
-    Assert.True(client.GetFlag(
-        "smart-summaries",
-        new ReflagContext
-        {
-            User = new ReflagUserContext { Id = "qa-user" },
-        }));
-}
-```
-
-### JSON overrides for multivariate flags
-
-Set JSON-valued overrides at construction with `JsonFlagOverrides`, including when registering the client with dependency injection:
-
-```csharp
-builder.Services.AddReflag(new ReflagClientOptions
-{
-    JsonFlagOverrides = new Dictionary<string, object?>
-    {
-        ["model"] = new { name = "large", maxTokens = 8000 },
-        ["demo-flag"] = true,
-    },
+    ["model"] = "quick",
+    ["limits"] = new { maxItems = 5 },
 });
 ```
 
-Use `JsonFlagOverridesFactory` for context-dependent startup values. `SetFlagOverrides(...)` and `PushFlagOverrides(...)` accept the same dictionary shape or a context-dependent function.
-
-Overriding a flag does not change the results of other flags that depend on it.
-
-### Additional ways to provide flag overrides
-
-You can also provide overrides through environment variables:
-
-```bash
-export REFLAG_FLAGS_ENABLED=flag-a,flag-b
-export REFLAG_FLAGS_DISABLED=flag-c
-```
-
-The example app tests in this repository also use `PushFlagOverrides(...)` to toggle flags through the real minimal API endpoints.
-See:
-
-- `examples/Reflag.MinimalApiExample.Tests/ExampleAppTests.cs`
+Pushed layers win over base overrides and are removed independently by disposing them. Overrides apply **after evaluation**, so overriding a flag does not change the results of other flags that depend on it. `REFLAG_FLAGS_ENABLED` and `REFLAG_FLAGS_DISABLED` also set base overrides. Offline mode does not fetch, load a fallback provider, or send tracking events. In ASP.NET Core tests, get `ReflagClient` from the test host's services; see `examples/Reflag.MinimalApiExample.Tests/ExampleAppTests.cs`.
 
 ## Using with ASP.NET Core
 
@@ -392,10 +316,9 @@ using Reflag;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddReflag(sp => new ReflagClientOptions
+builder.Services.AddReflag(new ReflagClientOptions
 {
     SecretKey = builder.Configuration["REFLAG_SECRET_KEY"],
-    Logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Reflag"),
 });
 
 var app = builder.Build();
@@ -606,6 +529,10 @@ var bound = client.BindClient(
         Active = false,
     });
 ```
+
+## Remote config
+
+Remote config is not supported by this SDK. Use [multivariate flags](#multivariate-flags) for configuration values instead.
 
 ## Upgrading from 0.2.x to 0.3.0
 

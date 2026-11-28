@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Reflag.Internal;
 
 namespace Reflag;
@@ -23,7 +24,9 @@ public static class ReflagServiceCollectionExtensions
         ThrowHelpers.ThrowIfNull(services, nameof(services));
         ThrowHelpers.ThrowIfNull(configure, nameof(configure));
 
-        services.AddSingleton(sp => new ReflagClient(configure(sp)));
+        services.AddSingleton(sp => new ReflagClient(
+            configure(sp),
+            sp.GetService<ILoggerFactory>()?.CreateLogger("Reflag")));
         services.AddSingleton<IHostedService, ReflagInitializationHostedService>();
         return services;
     }
