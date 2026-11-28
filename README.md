@@ -15,7 +15,7 @@ Or add the package reference directly:
 <!-- x-release-please-start-version -->
 ```xml
 <ItemGroup>
-  <PackageReference Include="Reflag.RuntimeSDK" Version="0.3.1" />
+  <PackageReference Include="Reflag.RuntimeSDK" Version="0.4.0" />
 </ItemGroup>
 ```
 <!-- x-release-please-end -->

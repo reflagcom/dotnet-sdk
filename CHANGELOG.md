@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/reflagcom/dotnet-sdk/compare/v0.3.1...v0.4.0) (2026-11-28)
+
+
+### Features
+
+* improve developer ergonomics ([#23](https://github.com/reflagcom/dotnet-sdk/issues/23)) ([c30c11e](https://github.com/reflagcom/dotnet-sdk/commit/c30c11e3655fde8d34a0f147979f9046efab86c2))
+
 ## [0.3.1](https://github.com/reflagcom/dotnet-sdk/compare/v0.3.0...v0.3.1) (2026-11-24)
 
 
